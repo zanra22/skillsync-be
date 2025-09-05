@@ -43,6 +43,7 @@ jobs:
           ENVIRONMENT: production
           PROD_SECRET_KEY: ${{ secrets.SECRET_KEY }}
           DJANGO_DEBUG: 'False'
+          PROD_FRONTEND_URL: 'https://www.skillsync.studio'
         
       # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
 

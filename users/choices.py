@@ -30,10 +30,7 @@ class AccountStatus(models.TextChoices):
     BANNED = "banned", _("Banned")
 
 
-class SkillLevel(models.TextChoices):
-    BEGINNER = "beginner", _("Beginner")
-    INTERMEDIATE = "intermediate", _("Intermediate")
-    EXPERT = "expert", _("Expert")
+
 
 
 
