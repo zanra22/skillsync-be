@@ -9,6 +9,7 @@ ALLOWED_HOSTS = ['.azurewebsites.net', '127.0.0.1', 'localhost', '.skillsync.stu
 
 # FRONTEND_URL is already resolved based on ENVIRONMENT in constants.py
 print(f"Production FRONTEND_URL: {FRONTEND_URL}")
+print('production checkpoint')
 
 DATABASES = {
     "default": DATABASE_CONFIG,

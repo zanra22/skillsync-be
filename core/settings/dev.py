@@ -9,6 +9,7 @@ ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '0.0.0.0']
 
 # FRONTEND_URL is already resolved based on ENVIRONMENT in constants.py
 print(f"Development FRONTEND_URL: {FRONTEND_URL}")
+print('checkpoint')
 
 DATABASES = {
     "default": DATABASE_CONFIG,
