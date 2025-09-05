@@ -17,7 +17,12 @@ SECRET_KEY = {
     "production": os.getenv("PROD_SECRET_KEY"),
 }.get(ENVIRONMENT, os.getenv("DEV_SECRET_KEY"))
 
-print(SECRET_KEY)
+ALLOWED_HOSTS = {
+    "production": [".azurewebsites.net", "127.0.0.1", "localhost", ".skillsync.studio"],
+}
+
+print(f"Environment: {ENVIRONMENT}"
+      f"\nSecret Key: {SECRET_KEY}")
 
 FRONTEND_URL = {
     "development": os.getenv("DEV_FRONTEND_URL", "http://localhost:3000"),
