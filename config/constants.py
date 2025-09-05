@@ -18,9 +18,18 @@ SECRET_KEY = {
 }.get(ENVIRONMENT, os.getenv("DEV_SECRET_KEY"))
 
 ALLOWED_HOSTS = {
-    "production": [".azurewebsites.net", "127.0.0.1", "localhost", ".skillsync.studio"],
+    "production": [
+        ".azurewebsites.studio",  # Replace with actual production URL
+        "api.skillsync.studio",                   # Replace with actual production API domain
+        "skillsync.studio",                       # Main domain
+        "127.0.0.1", 
+        "localhost"
+    ],
 }
 
+# Get the current allowed hosts for the environment
+ALLOWED_HOSTS_CONFIG = ALLOWED_HOSTS.get(ENVIRONMENT, ALLOWED_HOSTS["development"])
+print(f"Allowed Hosts: {ALLOWED_HOSTS_CONFIG}")
 print(f"Environment: {ENVIRONMENT}"
       f"\nSecret Key: {SECRET_KEY}")
 
@@ -47,7 +56,7 @@ DATABASES = {
 
 # Get the current database config
 DATABASE_CONFIG = DATABASES.get(ENVIRONMENT, DATABASES["development"])
-
+print()
 # Django Ninja JWT Configuration - MAXIMUM SECURITY
 NINJA_JWT_CONFIG = {
     # CRITICAL: Very short access token lifetime (5 minutes)

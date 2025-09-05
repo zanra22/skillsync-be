@@ -3,13 +3,15 @@ import ssl
 from dotenv import load_dotenv
 from pathlib import Path
 
-from config.constants import SECRET_KEY, FRONTEND_URL, ENVIRONMENT, DATABASES, NINJA_JWT_CONFIG
+from config.constants import SECRET_KEY, FRONTEND_URL, ENVIRONMENT, DATABASES, NINJA_JWT_CONFIG, ALLOWED_HOSTS_CONFIG
 
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 SECRET_KEY = SECRET_KEY
+
+ALLOWED_HOSTS = ALLOWED_HOSTS_CONFIG
 
 print(f"Current Environment: {ENVIRONMENT}")
 print(f"Using SECRET_KEY: {SECRET_KEY}")
