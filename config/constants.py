@@ -17,6 +17,8 @@ SECRET_KEY = {
     "production": os.getenv("PROD_SECRET_KEY"),
 }.get(ENVIRONMENT, os.getenv("DEV_SECRET_KEY"))
 
+print(SECRET_KEY)
+
 FRONTEND_URL = {
     "development": os.getenv("DEV_FRONTEND_URL", "http://localhost:3000"),
     "staging": os.getenv("STAG_FRONTEND_URL"),
@@ -86,3 +88,5 @@ NINJA_JWT_CONFIG = {
     'AUTH_COOKIE_HTTP_ONLY': True,
     'AUTH_COOKIE_SAMESITE': 'Strict',
 }
+
+print(NINJA_JWT_CONFIG)
