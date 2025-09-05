@@ -1,9 +1,10 @@
-from ninja import NinjaAPI
-from .schema import schema # Import the schema you just created
-
+from django.urls import path
+from .schema import schema
 from strawberry.django.views import AsyncGraphQLView
 
-api = NinjaAPI()
+# Create the GraphQL view
+graphql_view = AsyncGraphQLView.as_view(schema=schema)
 
-# Add a path for the GraphQL view
-api.add_router("/", AsyncGraphQLView.as_view(schema=schema))
+urlpatterns = [
+    path("graphql/", graphql_view, name="graphql"),
+]
