@@ -35,11 +35,11 @@ jobs:
       - name: Run Django migrations
         run: python manage.py migrate
         env:
-          DB_HOST: ${{ secrets.PROD_DB_HOST }}
-          DB_NAME: ${{ secrets.PROD_DB_NAME }}
-          DB_USER: ${{ secrets.PROD_DB_USER }}
-          DB_PASSWORD: ${{ secrets.PROD_DB_PASSWORD }}
-          DB_PORT: 5432
+          PROD_DB_HOST: ${{ secrets.PROD_DB_HOST }}
+          PROD_DB_NAME: ${{ secrets.PROD_DB_NAME }}
+          PROD_DB_USER: ${{ secrets.PROD_DB_USER }}
+          PROD_DB_PASSWORD: ${{ secrets.PROD_DB_PASSWORD }}
+          PROD_DB_PORT: 5432
           ENVIRONMENT: "production"
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
           PROD_SECRET_KEY: ${{ secrets.PROD_SECRET_KEY }}
