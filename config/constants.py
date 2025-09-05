@@ -28,7 +28,7 @@ ALLOWED_HOSTS = {
 }
 
 # Get the current allowed hosts for the environment
-ALLOWED_HOSTS_CONFIG = ALLOWED_HOSTS.get(ENVIRONMENT, ALLOWED_HOSTS["development"])
+ALLOWED_HOSTS_CONFIG = ALLOWED_HOSTS.get(ENVIRONMENT)
 print(f"Allowed Hosts: {ALLOWED_HOSTS_CONFIG}")
 print(f"Environment: {ENVIRONMENT}"
       f"\nSecret Key: {SECRET_KEY}")
