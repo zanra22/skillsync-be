@@ -11,6 +11,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 SECRET_KEY = SECRET_KEY
 
+print(f"Current Environment: {ENVIRONMENT}")
+print(f"Using SECRET_KEY: {SECRET_KEY}")
+
 DEBUG = True
 
 INSTALLED_APPS = [
