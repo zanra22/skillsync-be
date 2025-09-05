@@ -42,6 +42,7 @@ jobs:
           DB_PORT: 5432
           ENVIRONMENT: "development"
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          PROD_SECRET_KEY: ${{ secrets.PROD_SECRET_KEY }}
           DJANGO_DEBUG: 'False'
         
       # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
