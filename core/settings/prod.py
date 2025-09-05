@@ -13,3 +13,5 @@ print(f"Production FRONTEND_URL: {FRONTEND_URL}")
 DATABASES = {
     "default": DATABASE_CONFIG,
 }
+
+print(f"Production DATABASES: {DATABASES}")
