@@ -19,7 +19,7 @@ SECRET_KEY = {
 
 ALLOWED_HOSTS = {
     "production": [
-        ".azurewebsites.studio",  # Replace with actual production URL
+        ".azurewebsites.net",  # Replace with actual production URL
         "api.skillsync.studio",                   # Replace with actual production API domain
         "skillsync.studio",                       # Main domain
         "127.0.0.1", 
