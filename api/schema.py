@@ -1,24 +1,45 @@
 import strawberry
-import strawberry_django
-from typing import List
-
-from django.contrib.auth.models import User
-
-@strawberry_django.type(User)
-class UserType:
-    id: strawberry.auto
-    username: strawberry.auto
-    email: strawberry.auto
-    first_name: strawberry.auto
-    last_name: strawberry.auto
-    is_active: strawberry.auto
-    date_joined: strawberry.auto
+from users.query import UsersQuery  # Updated import
+from users.mutation import UsersMutation  # Updated import
+from auth.query import AuthQuery  # Import auth query
+from auth.mutation import AuthMutation  # Import auth mutation
+# Add more imports as you create other apps
+# from skills.query import SkillsQuery
+# from skills.mutation import SkillsMutation
 
 @strawberry.type
 class Query:
-
     @strawberry.field
-    def users(self) -> List[UserType]:
-        return User.objects.all()
+    def users(self) -> UsersQuery:
+        return UsersQuery()
+    
+    @strawberry.field
+    def auth(self) -> AuthQuery:
+        return AuthQuery()
+    
+    # Add more app resolvers as you create them
+    # @strawberry.field
+    # def skills(self) -> SkillsQuery:
+    #     return SkillsQuery()
+    
+    # Health check
+    @strawberry.field
+    def health(self) -> str:
+        return "GraphQL API is running!"
 
-schema = strawberry.Schema(query=Query)
+@strawberry.type  
+class Mutation:
+    @strawberry.field
+    def users(self) -> UsersMutation:
+        return UsersMutation()
+    
+    @strawberry.field
+    def auth(self) -> AuthMutation:
+        return AuthMutation()
+    
+    # Add more app mutations as you create them
+    # @strawberry.field
+    # def skills(self) -> SkillsMutation:
+    #     return SkillsMutation()
+
+schema = strawberry.Schema(query=Query, mutation=Mutation)

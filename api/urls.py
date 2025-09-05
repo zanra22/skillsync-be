@@ -1,10 +1,11 @@
 from django.urls import path
+from django.views.decorators.csrf import csrf_exempt
 from .schema import schema
 from strawberry.django.views import AsyncGraphQLView
 
-# Create the GraphQL view
-graphql_view = AsyncGraphQLView.as_view(schema=schema)
+# Create the GraphQL view with CSRF exemption
+graphql_view = csrf_exempt(AsyncGraphQLView.as_view(schema=schema))
 
 urlpatterns = [
-    path("graphql/", graphql_view, name="graphql"),
+    path("", graphql_view, name="graphql"),
 ]
