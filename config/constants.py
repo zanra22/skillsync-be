@@ -9,7 +9,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Application Configuration
-ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+ENVIRONMENT = os.getenv("ENVIRONMENT")
 
 SECRET_KEY = {
     "development": os.getenv("DEV_SECRET_KEY"),
@@ -60,7 +60,7 @@ DATABASES = {
 
 # Get the current database config
 DATABASE_CONFIG = DATABASES.get(ENVIRONMENT, DATABASES["development"])
-print()
+print(f"Database Config: {DATABASE_CONFIG}")
 # Django Ninja JWT Configuration - MAXIMUM SECURITY
 NINJA_JWT_CONFIG = {
     # CRITICAL: Very short access token lifetime (5 minutes)
