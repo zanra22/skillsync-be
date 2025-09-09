@@ -41,7 +41,7 @@ jobs:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_PORT: 5432
           ENVIRONMENT: production
-          FRONTEND_URL: ${{ secrets.PROD_FRONTEND_URL }}
+          PROD_FRONTEND_URL: ${{ secrets.PROD_FRONTEND_URL }}
           PROD_SECRET_KEY: ${{ secrets.SECRET_KEY }}
           DJANGO_DEBUG: 'False'
         
