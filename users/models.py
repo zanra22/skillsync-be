@@ -34,6 +34,7 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
         extra_fields.setdefault("is_active", True)
+        extra_fields.setdefault("account_status", AccountStatus.ACTIVE)
         extra_fields.setdefault("role", UserRole.SUPER_ADMIN)  # Changed from ADMIN to SUPER_ADMIN
 
         if extra_fields.get("is_staff") is not True:

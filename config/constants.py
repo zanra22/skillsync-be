@@ -18,6 +18,10 @@ SECRET_KEY = {
 }.get(ENVIRONMENT, os.getenv("DEV_SECRET_KEY"))
 
 ALLOWED_HOSTS = {
+    "development": [
+        "localhost",
+        "127.0.0.1"
+    ],
     "production": [
         ".azurewebsites.net",  # Replace with actual production URL
         "api.skillsync.studio",                   # Replace with actual production API domain

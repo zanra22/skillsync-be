@@ -13,6 +13,15 @@ class LoginInput:
     password: str
     remember_me: Optional[bool] = False
 
+@strawberry.input
+class SignupInput:
+    """Input type for user signup"""
+    first_name: str
+    last_name: str
+    email: str
+    password: str
+    accept_terms: bool
+
 @strawberry.type
 class LoginPayload:
     """Response payload for login mutation"""
@@ -22,6 +31,13 @@ class LoginPayload:
     access_token: Optional[str] = None
     # refresh_token removed - now stored in HTTP-only cookie
     expires_in: Optional[int] = None  # Token expiration time in seconds
+
+@strawberry.type
+class SignupPayload:
+    """Response payload for signup mutation"""
+    success: bool
+    message: str
+    user: Optional[UserType] = None
 
 @strawberry.type
 class LogoutPayload:

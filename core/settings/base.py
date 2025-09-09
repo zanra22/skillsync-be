@@ -3,7 +3,7 @@ import ssl
 from dotenv import load_dotenv
 from pathlib import Path
 
-from config.constants import SECRET_KEY, FRONTEND_URL, ENVIRONMENT, DATABASES, NINJA_JWT_CONFIG, ALLOWED_HOSTS_CONFIG
+from config.constants import SECRET_KEY, FRONTEND_URL, ENVIRONMENT, DATABASE_CONFIG, NINJA_JWT_CONFIG, ALLOWED_HOSTS_CONFIG
 
 load_dotenv()
 
@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     "strawberry.django",
     "users",
     "profiles",
+    "otps",  # OTP verification system
 ]
 
 MIDDLEWARE = [
@@ -84,6 +85,11 @@ AUTH_PASSWORD_VALIDATORS = [
 
 AUTH_USER_MODEL = "users.User"
 
+# Authentication backends
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+]
+
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
@@ -122,7 +128,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 DATA_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024
 
 DATABASES = {
-    "default": DATABASES["development"],
+    "default": DATABASE_CONFIG,
 }
 
 # Django Ninja JWT Settings

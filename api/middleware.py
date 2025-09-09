@@ -15,7 +15,11 @@ class JWTAuthMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
-        # Initialize user as anonymous
+        # Skip JWT authentication for admin URLs to allow session authentication
+        if request.path.startswith('/admin/'):
+            return self.get_response(request)
+        
+        # Initialize user as anonymous only for non-admin requests
         request.user = AnonymousUser()
         
         # Try to get token from Authorization header first (preferred for API)

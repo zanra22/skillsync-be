@@ -13,7 +13,7 @@ from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from ninja_jwt.tokens import RefreshToken, AccessToken
 
-from .types import LoginInput, LoginPayload, LogoutPayload, TokenRefreshPayload
+from .types import LoginInput, SignupInput, LoginPayload, SignupPayload, LogoutPayload, TokenRefreshPayload
 from .secure_utils import SecureTokenManager
 from users.types import UserType
 
@@ -95,6 +95,71 @@ class AuthMutation:
             return LoginPayload(
                 success=False,
                 message=f"Login failed: {str(e)}"
+            )
+    
+    @strawberry.mutation
+    async def sign_up(self, info, input: SignupInput) -> SignupPayload:
+        """Register a new user account"""
+        try:
+            # Check if user already exists
+            existing_user = await sync_to_async(User.objects.filter(email=input.email).exists)()
+            if existing_user:
+                return SignupPayload(
+                    success=False,
+                    message="A user with this email already exists"
+                )
+            
+            # Validate terms acceptance
+            if not input.accept_terms:
+                return SignupPayload(
+                    success=False,
+                    message="You must accept the terms and conditions"
+                )
+            
+            # Validate password length
+            if len(input.password) < 8:
+                return SignupPayload(
+                    success=False,
+                    message="Password must be at least 8 characters long"
+                )
+            
+            # Create username from first and last name
+            username = f"{input.first_name.lower()}{input.last_name.lower()}".replace(" ", "")
+            
+            # Ensure username is unique
+            original_username = username
+            counter = 1
+            while await sync_to_async(User.objects.filter(username=username).exists)():
+                username = f"{original_username}{counter}"
+                counter += 1
+            
+            # Create new user
+            user = await sync_to_async(User.objects.create_user)(
+                email=input.email,
+                username=username,
+                password=input.password,
+                first_name=input.first_name,
+                last_name=input.last_name
+            )
+            
+            # Set user as pending verification
+            if hasattr(user, 'account_status'):
+                user.account_status = 'pending'
+                await sync_to_async(user.save)(update_fields=['account_status'])
+            
+            # TODO: Send verification email here
+            # await send_verification_email(user)
+            
+            return SignupPayload(
+                success=True,
+                message="Account created successfully! Please check your email to verify your account.",
+                user=user
+            )
+            
+        except Exception as e:
+            return SignupPayload(
+                success=False,
+                message=f"Signup failed: {str(e)}"
             )
     
     @strawberry.mutation
