@@ -24,17 +24,11 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Create and start virtual environment
+      - name: Install dependencies and run migrations
         run: |
           python -m venv venv
           source venv/bin/activate
-      
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run Django migrations
-        run: |
-          source venv/bin/activate
+          pip install -r requirements.txt
           python manage.py migrate
         env:
           PROD_DB_HOST: ${{ secrets.PROD_DB_HOST }}
