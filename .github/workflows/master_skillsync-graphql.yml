@@ -31,14 +31,17 @@ jobs:
           pip install -r requirements.txt
           python manage.py migrate
         env:
+          ENVIRONMENT: production
+          PROD_SECRET_KEY: ${{ secrets.PROD_SECRET_KEY }}
+          PROD_FRONTEND_URL: ${{ secrets.PROD_FRONTEND_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          PROD_DB_ENGINE: django.db.backends.postgresql
           PROD_DB_HOST: ${{ secrets.PROD_DB_HOST }}
           PROD_DB_NAME: ${{ secrets.PROD_DB_NAME }}
           PROD_DB_USER: ${{ secrets.PROD_DB_USER }}
           PROD_DB_PASSWORD: ${{ secrets.PROD_DB_PASSWORD }}
           PROD_DB_PORT: ${{ secrets.PROD_DB_PORT }}
-          # ENVIRONMENT is not a standard Django setting, but PROD_SECRET_KEY is
-          PROD_SECRET_KEY: ${{ secrets.PROD_SECRET_KEY }}
-          DJANGO_DEBUG: 'False'
+          DJANGO_DEBUG: False
       
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
@@ -65,14 +68,3 @@ jobs:
           app-name: 'skillsync-graphql'
           slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_836640E511A8478B84B2E31346B3397D }}
-          app-settings: |
-            PROD_DB_HOST=${{ secrets.PROD_DB_HOST }}
-            PROD_DB_NAME=${{ secrets.PROD_DB_NAME }}
-            PROD_DB_USER=${{ secrets.PROD_DB_USER }}
-            PROD_DB_PASSWORD=${{ secrets.PROD_DB_PASSWORD }}
-            PROD_DB_PORT=${{ secrets.PROD_DB_PORT }}
-            ENVIRONMENT=production
-            PROD_FRONTEND_URL=${{ secrets.PROD_FRONTEND_URL }}
-            PROD_SECRET_KEY=${{ secrets.PROD_SECRET_KEY }}
-            RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
-            DJANGO_DEBUG=False
