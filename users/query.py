@@ -19,3 +19,10 @@ class UsersQuery:  # Renamed from Query to UsersQuery
             return await sync_to_async(User.objects.get)(id=id)
         except User.DoesNotExist:
             return None
+    
+    @strawberry.field
+    async def user_by_email(self, email: str) -> Optional[UserType]:
+        try:
+            return await sync_to_async(User.objects.get)(email=email)
+        except User.DoesNotExist:
+            return None

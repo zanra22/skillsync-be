@@ -6,6 +6,9 @@ from django.core.mail import send_mail
 from django.conf import settings
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
+from django.utils import timezone
+from asgiref.sync import sync_to_async
+from helpers.email_service import send_otp_email
 from .models import OTP, TrustedDevice, OTPVerificationLink
 from .types import (
     SendOTPInput, VerifyOTPInput, VerifyLinkInput, DeviceInfoInput,
@@ -23,7 +26,7 @@ class OTPMutation:
     """GraphQL mutations for OTP operations"""
 
     @strawberry.mutation
-    def send_otp(self, input: SendOTPInput, device_info: Optional[DeviceInfoInput] = None) -> SendOTPPayload:
+    async def send_otp(self, input: SendOTPInput, device_info: Optional[DeviceInfoInput] = None) -> SendOTPPayload:
         """
         Send OTP or verification link via email.
         
@@ -37,7 +40,7 @@ class OTPMutation:
         try:
             # Check if user exists
             try:
-                user = User.objects.get(email=input.email)
+                user = await sync_to_async(User.objects.get)(email=input.email)
             except User.DoesNotExist:
                 if input.purpose == 'signup':
                     return SendOTPPayload(
@@ -58,25 +61,36 @@ class OTPMutation:
                     device_info.user_agent
                 )
                 
-                # Check if this is the user's first login
-                user_has_logged_in = user.last_login is not None
-                
-                if user_has_logged_in and TrustedDevice.is_device_trusted(user, device_fingerprint):
-                    requires_otp = False
-                    return SendOTPPayload(
-                        success=True,
-                        message="Device is trusted, OTP not required",
-                        requires_otp=False
-                    )
+                # For super_admin, ALWAYS require OTP regardless of device trust
+                if user.role == 'super_admin':
+                    requires_otp = True
+                    # Continue to send OTP, don't return early
+                else:
+                    # Check if this is the user's first login
+                    user_has_logged_in = user.last_login is not None
+                    
+                    if not user_has_logged_in:
+                        # First time login always requires OTP
+                        requires_otp = True
+                    else:
+                        # Check if device is trusted for returning users
+                        if await sync_to_async(TrustedDevice.is_device_trusted)(user, device_fingerprint):
+                            requires_otp = False
+                            return SendOTPPayload(
+                                success=True,
+                                message="Device is trusted, OTP not required",
+                                requires_otp=False
+                            )
             
             # Create OTP and verification link
-            otp, plain_code = OTP.create_otp(user, input.purpose, expiry_minutes=10)
-            verification_link = OTPVerificationLink.create_verification_link(
+            # Create OTP with extended expiry for testing
+            otp, plain_code = await sync_to_async(OTP.create_otp)(user, input.purpose, expiry_minutes=10)
+            verification_link = await sync_to_async(OTPVerificationLink.create_verification_link)(
                 user, input.purpose, expiry_hours=1
             )
             
             # Send email with both OTP and verification link
-            success = self._send_otp_email(user, plain_code, verification_link.token, input.purpose)
+            success = await self._send_otp_email(user, plain_code, verification_link.token, input.purpose)
             
             if success:
                 return SendOTPPayload(
@@ -98,7 +112,7 @@ class OTPMutation:
             )
 
     @strawberry.mutation
-    def verify_otp(self, input: VerifyOTPInput, device_info: Optional[DeviceInfoInput] = None) -> VerifyOTPPayload:
+    async def verify_otp(self, input: VerifyOTPInput, device_info: Optional[DeviceInfoInput] = None) -> VerifyOTPPayload:
         """
         Verify OTP code for a user.
         
@@ -110,17 +124,32 @@ class OTPMutation:
             VerifyOTPPayload: Result of the verification
         """
         try:
+            # Debug logging
+            print(f"DEBUG: Verifying OTP for email={input.email}, purpose={input.purpose}, code={input.code}")
+            
             # Get user
             try:
-                user = User.objects.get(email=input.email)
+                user = await sync_to_async(User.objects.get)(email=input.email)
+                print(f"DEBUG: Found user {user.email}")
             except User.DoesNotExist:
+                print(f"DEBUG: No user found with email {input.email}")
                 return VerifyOTPPayload(
                     success=False,
                     message="No account found with this email address"
                 )
             
+            # Check for valid OTPs
+            active_otps = await sync_to_async(list)(OTP.objects.filter(
+                user=user,
+                purpose=input.purpose,
+                used_at__isnull=True,
+                expires_at__gt=timezone.now()
+            ))
+            print(f"DEBUG: Found {len(active_otps)} active OTPs for this user and purpose")
+            
             # Verify OTP
-            success, message = OTP.verify_user_otp(user, input.code, input.purpose)
+            success, message = await sync_to_async(OTP.verify_user_otp)(user, input.code, input.purpose)
+            print(f"DEBUG: Verification result: success={success}, message={message}")
             
             if not success:
                 return VerifyOTPPayload(
@@ -134,11 +163,11 @@ class OTPMutation:
             if input.purpose == 'signup':
                 # Activate user account
                 user.account_status = 'active'
-                user.save()
+                await sync_to_async(user.save)()
             
             # Trust device if requested and device info provided
             if input.trust_device and device_info:
-                TrustedDevice.trust_device(
+                await sync_to_async(TrustedDevice.trust_device)(
                     user, 
                     device_info.ip_address, 
                     device_info.user_agent,
@@ -160,7 +189,7 @@ class OTPMutation:
             )
 
     @strawberry.mutation
-    def verify_link(self, input: VerifyLinkInput) -> VerifyLinkPayload:
+    async def verify_link(self, input: VerifyLinkInput) -> VerifyLinkPayload:
         """
         Verify email verification link.
         
@@ -171,7 +200,7 @@ class OTPMutation:
             VerifyLinkPayload: Result of the verification
         """
         try:
-            user, success, message = OTPVerificationLink.verify_token(input.token, input.purpose)
+            user, success, message = await sync_to_async(OTPVerificationLink.verify_token)(input.token, input.purpose)
             
             if not success:
                 return VerifyLinkPayload(
@@ -183,7 +212,7 @@ class OTPMutation:
             if input.purpose == 'signup':
                 # Activate user account
                 user.account_status = 'active'
-                user.save()
+                await sync_to_async(user.save)()
             
             return VerifyLinkPayload(
                 success=True,
@@ -198,7 +227,7 @@ class OTPMutation:
             )
 
     @strawberry.mutation
-    def check_device_trust(self, input: DeviceInfoInput, email: str) -> DeviceCheckPayload:
+    async def check_device_trust(self, input: DeviceInfoInput, email: str) -> DeviceCheckPayload:
         """
         Check if a device is trusted for a user.
         
@@ -212,7 +241,7 @@ class OTPMutation:
         try:
             # Get user
             try:
-                user = User.objects.get(email=email)
+                user = await sync_to_async(User.objects.get)(email=email)
             except User.DoesNotExist:
                 return DeviceCheckPayload(
                     is_trusted=False,
@@ -226,6 +255,14 @@ class OTPMutation:
                 input.user_agent
             )
             
+            # For super_admin, ALWAYS require OTP regardless of device trust or login history
+            if user.role == 'super_admin':
+                return DeviceCheckPayload(
+                    is_trusted=False,  # Force untrusted for super admin
+                    requires_otp=True,
+                    message="Super admin requires OTP verification"
+                )
+            
             # Check if this is the user's first login
             user_has_logged_in = user.last_login is not None
             
@@ -237,7 +274,7 @@ class OTPMutation:
                     message="First time login requires OTP verification"
                 )
             
-            is_trusted = TrustedDevice.is_device_trusted(user, device_fingerprint)
+            is_trusted = await sync_to_async(TrustedDevice.is_device_trusted)(user, device_fingerprint)
             
             return DeviceCheckPayload(
                 is_trusted=is_trusted,
@@ -253,7 +290,7 @@ class OTPMutation:
             )
 
     @strawberry.mutation
-    def revoke_trusted_device(self, input: RevokeTrustedDeviceInput) -> RevokeTrustedDevicePayload:
+    async def revoke_trusted_device(self, input: RevokeTrustedDeviceInput) -> RevokeTrustedDevicePayload:
         """
         Revoke trust for a specific device.
         
@@ -264,8 +301,8 @@ class OTPMutation:
             RevokeTrustedDevicePayload: Result of the operation
         """
         try:
-            device = TrustedDevice.objects.get(id=input.device_id)
-            device.revoke_trust()
+            device = await sync_to_async(TrustedDevice.objects.get)(id=input.device_id)
+            await sync_to_async(device.revoke_trust)()
             
             return RevokeTrustedDevicePayload(
                 success=True,
@@ -283,9 +320,9 @@ class OTPMutation:
                 message=f"An error occurred: {str(e)}"
             )
 
-    def _send_otp_email(self, user, otp_code, verification_token, purpose):
+    async def _send_otp_email(self, user, otp_code, verification_token, purpose):
         """
-        Send OTP email with both code and verification link.
+        Send OTP email with both code and verification link using Resend service.
         
         Args:
             user: User instance
@@ -297,58 +334,28 @@ class OTPMutation:
             bool: True if email sent successfully
         """
         try:
-            # Email subject based on purpose
-            subject_map = {
-                'signin': 'Sign In Verification Code',
-                'signup': 'Complete Your Account Registration',
-                'password_reset': 'Password Reset Verification',
-                'device_verification': 'New Device Verification'
-            }
-            
-            subject = subject_map.get(purpose, 'Verification Code')
-            
             # Create verification URL
             frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
             verification_url = f"{frontend_url}/verify?token={verification_token}&purpose={purpose}"
             
-            # Email context
-            context = {
-                'user': user,
-                'otp_code': otp_code,
-                'verification_url': verification_url,
-                'purpose': purpose,
-                'purpose_display': subject_map.get(purpose, 'Verification'),
-                'expiry_minutes': 10,  # OTP expiry
-                'link_expiry_hours': 1,  # Link expiry
-            }
+            # Get user's display name
+            username = user.username or user.first_name or user.email.split('@')[0]
             
-            # For now, send a simple email (you can create HTML templates later)
-            message = f"""
-            Hi {user.username or user.email},
-
-            Your verification code is: {otp_code}
-
-            Alternatively, you can click this link to verify:
-            {verification_url}
-
-            This code will expire in 10 minutes.
-            The verification link will expire in 1 hour.
-
-            If you didn't request this, please ignore this email.
-
-            Best regards,
-            SkillSync Team
-            """
-            
-            send_mail(
-                subject=subject,
-                message=message,
-                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@skillsync.com'),
-                recipient_list=[user.email],
-                fail_silently=False,
+            # Send email using our Resend service (make it async if needed)
+            success = await sync_to_async(send_otp_email)(
+                to_email=user.email,
+                otp_code=otp_code,
+                verification_url=verification_url,
+                username=username,
+                purpose=purpose  # Pass purpose for potential customization
             )
             
-            return True
+            if success:
+                print(f"OTP email sent successfully to {user.email} for {purpose}")
+            else:
+                print(f"Failed to send OTP email to {user.email} for {purpose}")
+            
+            return success
             
         except Exception as e:
             print(f"Email sending error: {e}")

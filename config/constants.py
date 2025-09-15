@@ -45,8 +45,12 @@ FRONTEND_URL = {
 
 DATABASES = {
     "development": {
-        "ENGINE": os.getenv("DEV_DB_ENGINE", "django.db.backends.sqlite3"),
-        "NAME": BASE_DIR / os.getenv("DEV_DB_NAME", "db.sqlite3"),
+        "ENGINE": os.getenv("DEV_DB_ENGINE", "django.db.backends.postgresql"),
+        "NAME": os.getenv("DEV_DB_NAME"),
+        "USER": os.getenv("DEV_DB_USER"),
+        "PASSWORD": os.getenv("DEV_DB_PASSWORD"),
+        "HOST": os.getenv("DEV_DB_HOST", "localhost"),
+        "PORT": os.getenv("DEV_DB_PORT", "5432"),
     },
     "production": {
         "ENGINE": os.getenv("PROD_DB_ENGINE", "django.db.backends.postgresql"),
@@ -59,7 +63,7 @@ DATABASES = {
 }
 
 # Get the current database config
-DATABASE_CONFIG = DATABASES.get(ENVIRONMENT, DATABASES["development"])
+DATABASE_CONFIG = DATABASES.get(ENVIRONMENT)
 print(f"Database Config: {DATABASE_CONFIG}")
 # Django Ninja JWT Configuration - MAXIMUM SECURITY
 NINJA_JWT_CONFIG = {
@@ -106,5 +110,27 @@ NINJA_JWT_CONFIG = {
     'AUTH_COOKIE_HTTP_ONLY': True,
     'AUTH_COOKIE_SAMESITE': 'Strict',
 }
+
+# Email Configuration - Resend.com
+EMAIL_CONFIG = {
+    "development": {
+        "BACKEND": "django.core.mail.backends.smtp.EmailBackend",  # Use Resend for dev too
+        "RESEND_API_KEY": os.getenv("RESEND_API_KEY"),
+        "DEFAULT_FROM_EMAIL": "SkillSync Dev <dev@skillsync.studio>",  # Use working domain
+    },
+    "staging": {
+        "BACKEND": "django.core.mail.backends.smtp.EmailBackend",
+        "RESEND_API_KEY": os.getenv("RESEND_API_KEY"),
+        "DEFAULT_FROM_EMAIL": "SkillSync Staging <staging@skillsync.studio>",  # Use working domain
+    },
+    "production": {
+        "BACKEND": "django.core.mail.backends.smtp.EmailBackend",
+        "RESEND_API_KEY": os.getenv("RESEND_API_KEY"),
+        "DEFAULT_FROM_EMAIL": "SkillSync <support@skillsync.studio>",  # Use working domain
+    },
+}
+
+# Get current email config
+EMAIL_SETTINGS = EMAIL_CONFIG.get(ENVIRONMENT, EMAIL_CONFIG["development"])
 
 print(NINJA_JWT_CONFIG)

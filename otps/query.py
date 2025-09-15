@@ -2,6 +2,7 @@ import strawberry
 import strawberry_django
 from typing import List, Optional
 from django.contrib.auth import get_user_model
+from asgiref.sync import sync_to_async
 from .models import TrustedDevice
 from .types import TrustedDeviceType
 
@@ -13,7 +14,7 @@ class OTPQuery:
     """GraphQL queries for OTP operations"""
 
     @strawberry.field
-    def user_trusted_devices(self, user_id: str) -> List[TrustedDeviceType]:
+    async def user_trusted_devices(self, user_id: str) -> List[TrustedDeviceType]:
         """
         Get all trusted devices for a user.
         
@@ -24,11 +25,13 @@ class OTPQuery:
             List[TrustedDeviceType]: List of trusted devices
         """
         try:
-            user = User.objects.get(id=user_id)
-            devices = TrustedDevice.objects.filter(
-                user=user,
-                is_active=True
-            ).order_by('-last_used')
+            user = await sync_to_async(User.objects.get)(id=user_id)
+            devices = await sync_to_async(list)(
+                TrustedDevice.objects.filter(
+                    user=user,
+                    is_active=True
+                ).order_by('-last_used')
+            )
             
             return devices
             
@@ -38,7 +41,7 @@ class OTPQuery:
             return []
 
     @strawberry.field
-    def trusted_device_by_id(self, device_id: str) -> Optional[TrustedDeviceType]:
+    async def trusted_device_by_id(self, device_id: str) -> Optional[TrustedDeviceType]:
         """
         Get a specific trusted device by ID.
         
@@ -49,7 +52,7 @@ class OTPQuery:
             Optional[TrustedDeviceType]: Trusted device if found
         """
         try:
-            device = TrustedDevice.objects.get(
+            device = await sync_to_async(TrustedDevice.objects.get)(
                 id=device_id,
                 is_active=True
             )
