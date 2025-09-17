@@ -5,6 +5,8 @@ from auth.query import AuthQuery  # Import auth query
 from auth.mutation import AuthMutation  # Import auth mutation
 from otps.query import OTPQuery  # Import OTP query
 from otps.mutation import OTPMutation  # Import OTP mutation
+from admin.query import AdminQuery  # Import admin query
+from admin.mutation import AdminMutation  # Import admin mutation
 # Add more imports as you create other apps
 # from skills.query import SkillsQuery
 # from skills.mutation import SkillsMutation
@@ -22,6 +24,10 @@ class Query:
     @strawberry.field
     def otps(self) -> OTPQuery:
         return OTPQuery()
+    
+    @strawberry.field
+    def admin(self) -> AdminQuery:
+        return AdminQuery()
     
     # Add more app resolvers as you create them
     # @strawberry.field
@@ -46,6 +52,10 @@ class Mutation:
     @strawberry.field
     def otps(self) -> OTPMutation:
         return OTPMutation()
+    
+    @strawberry.field
+    def admin(self) -> AdminMutation:
+        return AdminMutation()
     
     # Add more app mutations as you create them
     # @strawberry.field

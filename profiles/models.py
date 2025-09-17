@@ -1,12 +1,16 @@
 from django.db import models
+from django.contrib.auth import get_user_model
 from .choices import (
     MentorshipStatus, 
     CareerStage, 
     IndustryType,
     SkillLevel
 )
+User = get_user_model()
+
 # Create your models here.
 class UserProfile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     first_name = models.CharField(max_length=150, blank=False)
     last_name = models.CharField(max_length=150, blank=False)
     bio = models.TextField(max_length=500, blank=True, help_text="Tell us about yourself")

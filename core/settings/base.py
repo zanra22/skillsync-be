@@ -19,7 +19,7 @@ print(f"Using SECRET_KEY: {SECRET_KEY}")
 DEBUG = True
 
 INSTALLED_APPS = [
-    "django.contrib.admin",
+    # "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
@@ -32,6 +32,7 @@ INSTALLED_APPS = [
     "users",
     "profiles",
     "otps",  # OTP verification system
+    "admin",
 ]
 
 MIDDLEWARE = [
