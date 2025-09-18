@@ -30,9 +30,9 @@ def get_secure_jwt_settings(secret_key, debug=False):
         'AUTH_HEADER_TYPES': ('Bearer',),
         'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
         
-        # Custom token classes for enhanced security
-        'ACCESS_TOKEN_CLASS': 'ninja_jwt.tokens.AccessToken',
-        'REFRESH_TOKEN_CLASS': 'ninja_jwt.tokens.RefreshToken',
+        # Custom token classes for enhanced security (includes user role)
+        'ACCESS_TOKEN_CLASS': 'auth.custom_tokens.CustomAccessToken',
+        'REFRESH_TOKEN_CLASS': 'auth.custom_tokens.CustomRefreshToken',
         
         # Issuer validation
         'ISSUER': 'SkillSync',

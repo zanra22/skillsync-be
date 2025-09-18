@@ -83,7 +83,8 @@ class SecureTokenManager:
     @staticmethod
     def clear_secure_cookies(response):
         """Clear all authentication cookies"""
-        cookies_to_clear = ['refresh_token', 'client_fp', 'fp_hash']
+        # Clear both backend HTTP-only cookies and frontend-set cookies
+        cookies_to_clear = ['refresh_token', 'client_fp', 'fp_hash', 'access_token', 'auth-token', 'user-role']
         
         for cookie_name in cookies_to_clear:
             response.delete_cookie(

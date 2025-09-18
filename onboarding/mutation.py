@@ -3,8 +3,12 @@ import logging
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.utils.decorators import method_decorator
+from django.conf import settings
+from django.utils import timezone
 from typing import Optional
 from asgiref.sync import sync_to_async
+from auth.custom_tokens import CustomRefreshToken as RefreshToken, CustomAccessToken as AccessToken
+from auth.secure_utils import SecureTokenManager
 from profiles.models import UserIndustry, UserLearningGoal
 from profiles.choices import IndustryType, SkillLevel, CareerStage
 from helpers.ai_roadmap_service import gemini_ai_service, UserProfile as AIUserProfile, LearningGoal
@@ -33,11 +37,14 @@ class OnboardingMutation:
         Complete user onboarding by updating profile and creating goals.
         """
         try:
-            # Handle development mode user context
+            # Handle development mode user context (ONLY in development)
             dev_user_id = info.context.request.headers.get('X-Dev-User-ID')
             is_dev_mode = info.context.request.headers.get('X-Dev-Mode') == 'true'
             
-            if is_dev_mode and dev_user_id:
+            # SECURITY: Only allow development bypass in actual development environment
+            is_development_env = getattr(settings, 'DEBUG', False) and not getattr(settings, 'PRODUCTION', False)
+            
+            if is_dev_mode and dev_user_id and is_development_env:
                 logger.info(f"🔧 Development mode: Using user ID {dev_user_id}")
                 try:
                     user = await sync_to_async(User.objects.get)(id=dev_user_id)
@@ -48,6 +55,11 @@ class OnboardingMutation:
                         success=False,
                         message=f"Development user {dev_user_id} not found"
                     )
+            elif is_dev_mode and not is_development_env:
+                # Security: Log potential production bypass attempt
+                logger.warning(f"🚨 SECURITY: Development headers detected in non-development environment")
+                logger.warning(f"🚨 Request origin: {info.context.request.META.get('REMOTE_ADDR', 'Unknown')}")
+                # Fall through to normal authentication
             else:
                 # Check if user is authenticated (normal mode)
                 if not info.context.request.user.is_authenticated:
@@ -60,8 +72,60 @@ class OnboardingMutation:
             logger.info(f"🚀 Processing onboarding completion for user: {user.email}")
             
             # Update user role only (basic auth info stays in User model)
+            old_role = user.role
             user.role = input.role
             await sync_to_async(user.save)()
+            
+            logger.info(f"🔄 User role updated: {old_role} → {user.role}")
+            
+            # SECURITY: Generate fresh JWT token with updated role for seamless transition
+            # This ensures all subsequent requests use the correct role without security bypasses
+            fresh_access_token = None
+            token_expires_in = None
+            
+            try:
+                logger.info(f"🔄 Starting token generation for user {user.email} with role {user.role}")
+                
+                # Generate new refresh token and access token with updated role
+                refresh = RefreshToken.for_user(user)
+                access_token = refresh.access_token
+                
+                logger.info(f"✅ Successfully generated tokens for user with role: {user.role}")
+                logger.info(f"🎯 Access token length: {len(str(access_token))}")
+                
+                # Update last login to maintain session security
+                user.last_login = timezone.now()
+                await sync_to_async(user.save)(update_fields=['last_login'])
+                
+                # Set secure HTTP-only cookies with all security features intact
+                response = info.context.response
+                logger.info(f"🔍 GraphQL context response available: {response is not None}")
+                
+                if response:
+                    try:
+                        SecureTokenManager.set_secure_jwt_cookies(
+                            response, str(access_token), str(refresh), info.context.request
+                        )
+                        logger.info("🔒 Updated secure JWT cookies with new role")
+                    except Exception as cookie_error:
+                        logger.error(f"❌ Cookie setting failed: {cookie_error}")
+                        # Continue anyway - cookies are not critical for returning the token
+                else:
+                    logger.warning("⚠️ No response context available for setting cookies")
+                
+                # Prepare token data for frontend (access token only, refresh stays HTTP-only)
+                fresh_access_token = str(access_token)
+                token_expires_in = int(settings.NINJA_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds())
+                
+                logger.info(f"✅ Prepared fresh token for response: {fresh_access_token[:50]}...")
+                logger.info(f"⏰ Token expires in: {token_expires_in} seconds")
+                
+                logger.info(f"✅ Generated fresh token with role: {user.role}")
+                
+            except Exception as token_error:
+                logger.error(f"❌ Token refresh failed: {token_error}")
+                # Continue without token refresh - existing auth will still work
+                # This ensures onboarding completion doesn't fail due to token issues
             
             # Get or create user profile and update personal information
             from profiles.models import UserProfile as DjangoUserProfile
@@ -178,10 +242,15 @@ class OnboardingMutation:
                             'expert': SkillLevel.EXPERT,
                         }
                         
+                        logger.info(f"🎯 Processing goal: {goal_input.skill_name}")
+                        logger.info(f"📊 Target skill level received: '{goal_input.target_skill_level}'")
+                        
                         target_level = skill_level_mapping.get(
                             goal_input.target_skill_level.lower(),
                             SkillLevel.BEGINNER
                         )
+                        
+                        logger.info(f"📈 Mapped to Django choice: {target_level}")
                         
                         goal = await sync_to_async(UserLearningGoal.objects.create)(
                             user=user,
@@ -266,11 +335,21 @@ class OnboardingMutation:
             
             logger.info(f"✅ Onboarding completed for user: {user.email} with {len(roadmaps_data)} roadmaps")
             
+            # Log what we're about to return
+            logger.info(f"🔍 Returning payload with:")
+            logger.info(f"  - success: True")
+            logger.info(f"  - user role: {user.role}")
+            logger.info(f"  - access_token present: {fresh_access_token is not None}")
+            logger.info(f"  - access_token length: {len(fresh_access_token) if fresh_access_token else 0}")
+            logger.info(f"  - expires_in: {token_expires_in}")
+            
             return CompleteOnboardingPayload(
                 success=True,
                 message="Onboarding completed successfully",
                 user=onboarding_user,
-                roadmaps=roadmaps_data
+                roadmaps=roadmaps_data,
+                access_token=fresh_access_token,  # Fresh token with updated role
+                expires_in=token_expires_in       # Token expiration for frontend
             )
             
         except Exception as e:

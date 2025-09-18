@@ -70,3 +70,6 @@ class CompleteOnboardingPayload:
     message: str
     user: Optional[OnboardingUser] = None
     roadmaps: List[LearningRoadmap] = strawberry.field(default_factory=list)
+    # Security: Fresh access token with updated role for seamless role transition
+    access_token: Optional[str] = None
+    expires_in: Optional[int] = None

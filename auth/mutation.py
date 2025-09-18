@@ -11,7 +11,7 @@ from django.utils import timezone
 from django.contrib.sessions.models import Session
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
-from ninja_jwt.tokens import RefreshToken, AccessToken
+from .custom_tokens import CustomRefreshToken as RefreshToken, CustomAccessToken as AccessToken
 
 from .types import LoginInput, SignupInput, LoginPayload, SignupPayload, LogoutPayload, TokenRefreshPayload
 from .secure_utils import SecureTokenManager
