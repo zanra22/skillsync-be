@@ -7,6 +7,8 @@ from otps.query import OTPQuery  # Import OTP query
 from otps.mutation import OTPMutation  # Import OTP mutation
 from admin.query import AdminQuery  # Import admin query
 from admin.mutation import AdminMutation  # Import admin mutation
+from onboarding.query import OnboardingQuery  # Import onboarding query
+from onboarding.mutation import OnboardingMutation  # Import onboarding mutation
 # Add more imports as you create other apps
 # from skills.query import SkillsQuery
 # from skills.mutation import SkillsMutation
@@ -28,6 +30,10 @@ class Query:
     @strawberry.field
     def admin(self) -> AdminQuery:
         return AdminQuery()
+    
+    @strawberry.field
+    def onboarding(self) -> OnboardingQuery:
+        return OnboardingQuery()
     
     # Add more app resolvers as you create them
     # @strawberry.field
@@ -56,6 +62,10 @@ class Mutation:
     @strawberry.field
     def admin(self) -> AdminMutation:
         return AdminMutation()
+    
+    @strawberry.field
+    def onboarding(self) -> OnboardingMutation:
+        return OnboardingMutation()
     
     # Add more app mutations as you create them
     # @strawberry.field

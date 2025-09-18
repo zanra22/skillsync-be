@@ -6,7 +6,8 @@ from django.utils import timezone
 
 from .choices import (
     UserRole, 
-    AccountStatus, 
+    AccountStatus,
+    SubscriptionTier,
 )
 from helpers.generate_short_id import generate_short_id
 
@@ -60,7 +61,8 @@ class User(AbstractUser, PermissionsMixin):
     role = models.CharField(
         max_length=20,  # Increased from 15 to accommodate longer role names
         choices=UserRole.choices,
-        default=UserRole.LEARNER,  # Changed from USER to LEARNER
+        default=UserRole.NEW_USER,
+        help_text="User role - defaults to new_user, updated during onboarding"
     )
     
     # Account and Profile Information
@@ -74,8 +76,19 @@ class User(AbstractUser, PermissionsMixin):
     
     
     # Subscription and Premium Features
+    # Legacy fields (will be removed in future migration)
     is_premium = models.BooleanField(default=False)
     premium_expires_at = models.DateTimeField(null=True, blank=True)
+    
+    # New subscription system
+    subscription_tier = models.CharField(
+        max_length=20,
+        choices=SubscriptionTier.choices,
+        default=SubscriptionTier.FREE,
+    )
+    subscription_expires_at = models.DateTimeField(null=True, blank=True)
+    subscription_auto_renew = models.BooleanField(default=False)
+    subscription_started_at = models.DateTimeField(null=True, blank=True)
 
     # Email Verification
     email_verification_token = models.CharField(max_length=255, blank=True)
@@ -114,18 +127,34 @@ class User(AbstractUser, PermissionsMixin):
     
     def is_mentor(self):
         """Check if user is a mentor."""
+        if not self.role:
+            return False
         return self.role in [UserRole.MENTOR, UserRole.VIP_MENTOR, UserRole.EXPERT]
     
     def is_learner(self):
         """Check if user is a learner."""
+        if not self.role:
+            return False
         return self.role == UserRole.LEARNER
+    
+    def needs_onboarding(self):
+        """Check if user needs to complete onboarding."""
+        return self.role is None or not hasattr(self, 'profile') or not self.profile.onboarding_completed
+    
+    def has_completed_role_selection(self):
+        """Check if user has selected their role during onboarding."""
+        return self.role is not None
     
     def is_admin(self):
         """Check if user has admin privileges."""
+        if not self.role:
+            return False
         return self.role in [UserRole.SUPER_ADMIN, UserRole.ADMIN]
     
     def can_create_content(self):
         """Check if user can create learning content."""
+        if not self.role:
+            return False
         return self.role in [
             UserRole.INSTRUCTOR, 
             UserRole.CONTENT_CREATOR, 
@@ -136,6 +165,8 @@ class User(AbstractUser, PermissionsMixin):
     
     def can_moderate(self):
         """Check if user can moderate content."""
+        if not self.role:
+            return False
         return self.role in [
             UserRole.MODERATOR, 
             UserRole.ADMIN, 
@@ -144,11 +175,86 @@ class User(AbstractUser, PermissionsMixin):
     
     def is_premium_user(self):
         """Check if user has active premium subscription."""
-        if not self.is_premium:
+        if self.subscription_tier == SubscriptionTier.FREE:
             return False
-        if self.premium_expires_at and self.premium_expires_at < timezone.now():
+        if self.subscription_expires_at and self.subscription_expires_at < timezone.now():
             return False
         return True
+    
+    def is_enterprise_user(self):
+        """Check if user has enterprise subscription."""
+        return self.subscription_tier == SubscriptionTier.ENTERPRISE and self.is_premium_user()
+    
+    def get_subscription_limits(self):
+        """Get subscription limits based on tier."""
+        if self.subscription_tier == SubscriptionTier.FREE:
+            return {
+                'max_industries': 1,
+                'max_goals_per_industry': 2,
+                'ai_roadmap_generations_per_month': 3,
+                'can_access_premium_content': False,
+                'can_chat_with_ai': True,  # Basic chat
+                'max_mentor_sessions': 0,
+            }
+        elif self.subscription_tier == SubscriptionTier.PREMIUM:
+            return {
+                'max_industries': 3,
+                'max_goals_per_industry': 10,
+                'ai_roadmap_generations_per_month': 50,
+                'can_access_premium_content': True,
+                'can_chat_with_ai': True,
+                'max_mentor_sessions': 5,
+            }
+        elif self.subscription_tier == SubscriptionTier.ENTERPRISE:
+            return {
+                'max_industries': 10,
+                'max_goals_per_industry': 50,
+                'ai_roadmap_generations_per_month': 200,
+                'can_access_premium_content': True,
+                'can_chat_with_ai': True,
+                'max_mentor_sessions': 20,
+            }
+        return {}
+    
+    def can_add_industry(self):
+        """Check if user can add another industry."""
+        from profiles.models import UserIndustry
+        current_count = UserIndustry.objects.filter(user=self).count()
+        limits = self.get_subscription_limits()
+        return current_count < limits.get('max_industries', 0)
+    
+    def can_add_goal_to_industry(self, industry_id):
+        """Check if user can add another goal to specific industry."""
+        from profiles.models import UserLearningGoal
+        current_count = UserLearningGoal.objects.filter(
+            user=self, 
+            industry_id=industry_id
+        ).count()
+        limits = self.get_subscription_limits()
+        return current_count < limits.get('max_goals_per_industry', 0)
+    
+    def get_subscription_status(self):
+        """Get detailed subscription status."""
+        if self.subscription_tier == SubscriptionTier.FREE:
+            return {
+                'tier': self.subscription_tier,
+                'is_active': True,
+                'expires_at': None,
+                'auto_renew': False,
+                'status': 'active'
+            }
+        
+        is_active = self.is_premium_user()
+        status = 'active' if is_active else 'expired'
+        
+        return {
+            'tier': self.subscription_tier,
+            'is_active': is_active,
+            'expires_at': self.subscription_expires_at,
+            'auto_renew': self.subscription_auto_renew,
+            'status': status,
+            'started_at': self.subscription_started_at
+        }
     
     def get_mentorship_availability(self):
         """Get mentorship availability status."""

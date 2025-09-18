@@ -123,8 +123,8 @@ class AuthMutation:
                     message="Password must be at least 8 characters long"
                 )
             
-            # Create username from first and last name
-            username = f"{input.first_name.lower()}{input.last_name.lower()}".replace(" ", "")
+            # Create username from email (temporary until names are provided in onboarding)
+            username = input.email.split('@')[0].lower().replace('.', '_')
             
             # Ensure username is unique
             original_username = username
@@ -133,13 +133,13 @@ class AuthMutation:
                 username = f"{original_username}{counter}"
                 counter += 1
             
-            # Create new user
+            # Create new user without names (will be collected during onboarding)
             user = await sync_to_async(User.objects.create_user)(
                 email=input.email,
                 username=username,
                 password=input.password,
-                first_name=input.first_name,
-                last_name=input.last_name
+                first_name="",  # Empty initially, filled during onboarding
+                last_name=""    # Empty initially, filled during onboarding
             )
             
             # Set user as pending verification
@@ -166,8 +166,11 @@ class AuthMutation:
     async def refresh_token(self, info, refresh_token: Optional[str] = None) -> TokenRefreshPayload:
         """Refresh access token using refresh token from cookies with enhanced security"""
         try:
-            # Validate client fingerprint first
-            if not SecureTokenManager.validate_fingerprint(info.context.request):
+            # Validate client fingerprint first (skip in development)
+            from django.conf import settings
+            if settings.DEBUG:
+                print("🔧 Development mode: Skipping fingerprint validation for token refresh")
+            elif not SecureTokenManager.validate_fingerprint(info.context.request):
                 return TokenRefreshPayload(
                     success=False,
                     message="Security validation failed - potential session hijacking detected"

@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     "profiles",
     "otps",  # OTP verification system
     "admin",
+    "onboarding",
 ]
 
 MIDDLEWARE = [

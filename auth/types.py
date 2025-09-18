@@ -16,8 +16,6 @@ class LoginInput:
 @strawberry.input
 class SignupInput:
     """Input type for user signup"""
-    first_name: str
-    last_name: str
     email: str
     password: str
     accept_terms: bool

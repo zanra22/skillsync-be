@@ -33,6 +33,23 @@ class IndustryType(models.TextChoices):
     GOVERNMENT = "government", _("Government")
     OTHER = "other", _("Other")
     
+class OnboardingStep(models.TextChoices):
+    WELCOME = "welcome", _("Welcome")
+    ROLE_SELECTION = "role_selection", _("Role Selection")
+    BASIC_INFO = "basic_info", _("Basic Information")
+    INDUSTRY_SELECTION = "industry_selection", _("Industry Selection")
+    GOALS_SETUP = "goals_setup", _("Learning Goals Setup")
+    PREFERENCES = "preferences", _("Preferences")
+    COMPLETE = "complete", _("Complete")
+
+
+class GoalStatus(models.TextChoices):
+    NOT_STARTED = "not_started", _("Not Started")
+    IN_PROGRESS = "in_progress", _("In Progress")
+    COMPLETED = "completed", _("Completed")
+    ON_HOLD = "on_hold", _("On Hold")
+
+
 class SkillLevel(models.TextChoices):
     BEGINNER = "beginner", _("Beginner")
     INTERMEDIATE = "intermediate", _("Intermediate")
