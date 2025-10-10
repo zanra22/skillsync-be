@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "otps",  # OTP verification system
     "admin",
     "onboarding",
+    "lessons",  # AI-powered lesson content system
 ]
 
 MIDDLEWARE = [

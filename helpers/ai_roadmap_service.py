@@ -91,7 +91,8 @@ class GeminiAIService:
     
     def __init__(self):
         self.api_key = os.getenv('GEMINI_API_KEY')
-        self.api_url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent'
+        # Use gemini-2.0-flash-exp (same as lesson service - working model)
+        self.api_url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent'
         
         if not self.api_key:
             logger.warning("⚠️ GEMINI_API_KEY not found in environment variables")

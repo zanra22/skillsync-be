@@ -16,6 +16,13 @@ def get_secure_jwt_settings(secret_key, debug=False):
         # Refresh token lifetime (7 days max recommended)
         'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
         
+        # 🆕 REMEMBER ME: Long-lived refresh token (30 days when checked)
+        'REFRESH_TOKEN_LIFETIME_REMEMBER': timedelta(days=30),
+        
+        # 🆕 NO REMEMBER ME: Session-only (expires on browser close)
+        # None = session cookie (no max_age, deleted when browser closes)
+        'REFRESH_TOKEN_LIFETIME_SESSION': None,
+        
         # Enable token rotation for maximum security
         'ROTATE_REFRESH_TOKENS': True,
         

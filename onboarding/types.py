@@ -25,6 +25,7 @@ class CompleteOnboardingInput:
     first_name: str
     last_name: str
     bio: Optional[str] = None
+    current_role: Optional[str] = None  # Current profession/role for working professionals
     industry: str
     career_stage: str
     goals: List[LearningGoalInput]

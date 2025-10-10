@@ -9,6 +9,8 @@ from admin.query import AdminQuery  # Import admin query
 from admin.mutation import AdminMutation  # Import admin mutation
 from onboarding.query import OnboardingQuery  # Import onboarding query
 from onboarding.mutation import OnboardingMutation  # Import onboarding mutation
+from lessons.query import LessonsQuery  # Import lessons query
+from lessons.mutation import LessonsMutation  # Import lessons mutation
 # Add more imports as you create other apps
 # from skills.query import SkillsQuery
 # from skills.mutation import SkillsMutation
@@ -34,6 +36,10 @@ class Query:
     @strawberry.field
     def onboarding(self) -> OnboardingQuery:
         return OnboardingQuery()
+    
+    @strawberry.field
+    def lessons(self) -> LessonsQuery:
+        return LessonsQuery()
     
     # Add more app resolvers as you create them
     # @strawberry.field
@@ -66,6 +72,10 @@ class Mutation:
     @strawberry.field
     def onboarding(self) -> OnboardingMutation:
         return OnboardingMutation()
+    
+    @strawberry.field
+    def lessons(self) -> LessonsMutation:
+        return LessonsMutation()
     
     # Add more app mutations as you create them
     # @strawberry.field

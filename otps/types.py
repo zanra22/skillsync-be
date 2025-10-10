@@ -22,6 +22,7 @@ class VerifyOTPInput:
     code: str
     purpose: str
     trust_device: Optional[bool] = False
+    remember_me: Optional[bool] = False  # For signin OTP: session vs persistent cookies
 
 
 @strawberry.input
@@ -55,6 +56,7 @@ class VerifyOTPPayload:
     message: str
     user: Optional[UserType] = None
     device_trusted: bool = False
+    access_token: Optional[str] = None  # Return access token after successful OTP verification for signin
 
 
 @strawberry.type

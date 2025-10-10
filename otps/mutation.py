@@ -9,6 +9,8 @@ from django.utils.html import strip_tags
 from django.utils import timezone
 from asgiref.sync import sync_to_async
 from helpers.email_service import send_otp_email
+from auth.custom_tokens import CustomRefreshToken  # Import custom tokens
+from auth.secure_utils import SecureTokenManager  # Import for cookie management
 from .models import OTP, TrustedDevice, OTPVerificationLink
 from .types import (
     SendOTPInput, VerifyOTPInput, VerifyLinkInput, DeviceInfoInput,
@@ -112,7 +114,7 @@ class OTPMutation:
             )
 
     @strawberry.mutation
-    async def verify_otp(self, input: VerifyOTPInput, device_info: Optional[DeviceInfoInput] = None) -> VerifyOTPPayload:
+    async def verify_otp(self, info: strawberry.Info, input: VerifyOTPInput, device_info: Optional[DeviceInfoInput] = None) -> VerifyOTPPayload:
         """
         Verify OTP code for a user.
         
@@ -159,6 +161,7 @@ class OTPMutation:
             
             # Handle post-verification actions based on purpose
             device_trusted = False
+            access_token = None
             
             if input.purpose == 'signup':
                 # Activate user account
@@ -175,11 +178,44 @@ class OTPMutation:
                 )
                 device_trusted = True
             
+            # For signin purpose, generate and return tokens (complete the login)
+            if input.purpose == 'signin':
+                # Debug: Print input.remember_me value
+                print(f"🔍 DEBUG: input.remember_me = {input.remember_me}, type = {type(input.remember_me)}")
+                
+                # Use remember_me from input (passed from frontend login form)
+                remember_me_value = input.remember_me if input.remember_me is not None else False
+                print(f"🔍 DEBUG: remember_me_value after check = {remember_me_value}, type = {type(remember_me_value)}")
+                
+                # Generate tokens using custom refresh token (includes role claims)
+                # Pass remember_me to set correct token lifetime (7 days vs 30 days)
+                refresh = CustomRefreshToken.for_user(user, remember_me=remember_me_value)
+                access_token = str(refresh.access_token)
+                
+                # Set HTTP-only cookies (refresh_token, fingerprint)
+                SecureTokenManager.set_secure_jwt_cookies(
+                    response=info.context.response,
+                    access_token=access_token,
+                    refresh_token=str(refresh),
+                    request=info.context.request,
+                    remember_me=remember_me_value  # Respect user's Remember Me choice
+                )
+                
+                print(f"✅ Tokens generated for {user.email} after OTP verification (remember_me={remember_me_value})")
+                
+                # Debug: Print token expiry to verify lifetime
+                import time
+                token_exp = refresh.get('exp', 0)
+                current_time = int(time.time())
+                time_remaining = token_exp - current_time
+                print(f"🔍 DEBUG: Token lifetime = {time_remaining / 86400:.1f} days ({time_remaining / 3600:.1f} hours)")
+            
             return VerifyOTPPayload(
                 success=True,
                 message="OTP verified successfully",
                 user=user,
-                device_trusted=device_trusted
+                device_trusted=device_trusted,
+                access_token=access_token  # Return access token for signin
             )
             
         except Exception as e:

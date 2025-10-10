@@ -34,11 +34,23 @@ class CustomRefreshToken(RefreshToken):
     """Custom refresh token that includes user role in payload"""
     
     @classmethod
-    def for_user(cls, user):
+    def for_user(cls, user, remember_me=False):
         """
         Returns a refresh token for the given user that includes role information.
+        
+        Args:
+            user: The user object
+            remember_me: If True, use extended lifetime (30 days). If False, use default (7 days).
         """
         token = super().for_user(user)
+        
+        # Override token lifetime based on remember_me flag
+        if remember_me:
+            from django.conf import settings
+            from datetime import timedelta
+            # Set extended lifetime for Remember Me
+            lifetime = settings.NINJA_JWT.get('REFRESH_TOKEN_LIFETIME_REMEMBER', timedelta(days=30))
+            token.set_exp(lifetime=lifetime)
         
         # Add user role to refresh token payload (for consistency)
         token['role'] = user.role if hasattr(user, 'role') else 'learner'
