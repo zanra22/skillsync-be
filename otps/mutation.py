@@ -178,18 +178,19 @@ class OTPMutation:
                 )
                 device_trusted = True
             
-            # For signin purpose, generate and return tokens (complete the login)
-            if input.purpose == 'signin':
+            # For both signup and signin purposes, generate and return tokens (auto-login)
+            if input.purpose in ['signup', 'signin']:
                 # Debug: Print input.remember_me value
-                print(f"🔍 DEBUG: input.remember_me = {input.remember_me}, type = {type(input.remember_me)}")
+                print(f"🔍 DEBUG: purpose={input.purpose}, remember_me = {input.remember_me}, type = {type(input.remember_me)}")
                 
-                # Use remember_me from input (passed from frontend login form)
+                # Use remember_me from input (passed from frontend form)
                 remember_me_value = input.remember_me if input.remember_me is not None else False
                 print(f"🔍 DEBUG: remember_me_value after check = {remember_me_value}, type = {type(remember_me_value)}")
                 
                 # Generate tokens using custom refresh token (includes role claims)
                 # Pass remember_me to set correct token lifetime (7 days vs 30 days)
-                refresh = CustomRefreshToken.for_user(user, remember_me=remember_me_value)
+                # Wrap in sync_to_async to avoid "cannot call from async context" error
+                refresh = await sync_to_async(CustomRefreshToken.for_user)(user, remember_me=remember_me_value)
                 access_token = str(refresh.access_token)
                 
                 # Set HTTP-only cookies (refresh_token, fingerprint)
@@ -201,7 +202,7 @@ class OTPMutation:
                     remember_me=remember_me_value  # Respect user's Remember Me choice
                 )
                 
-                print(f"✅ Tokens generated for {user.email} after OTP verification (remember_me={remember_me_value})")
+                print(f"✅ Tokens generated for {user.email} after OTP verification (purpose={input.purpose}, remember_me={remember_me_value})")
                 
                 # Debug: Print token expiry to verify lifetime
                 import time
@@ -215,7 +216,7 @@ class OTPMutation:
                 message="OTP verified successfully",
                 user=user,
                 device_trusted=device_trusted,
-                access_token=access_token  # Return access token for signin
+                access_token=access_token  # Return access token for both signup and signin
             )
             
         except Exception as e:

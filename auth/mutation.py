@@ -12,7 +12,7 @@ from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from .custom_tokens import CustomRefreshToken as RefreshToken, CustomAccessToken as AccessToken
 
-from .types import LoginInput, SignupInput, LoginPayload, SignupPayload, LogoutPayload, TokenRefreshPayload
+from .types import LoginInput, SignupInput, LoginPayload, SignupPayload, LogoutPayload, TokenRefreshPayload, DeviceInfoInput
 from .secure_utils import SecureTokenManager
 from users.types import UserType
 
@@ -21,10 +21,13 @@ User = get_user_model()
 @strawberry.type
 class AuthMutation:
     @strawberry.mutation
-    async def login(self, info, input: LoginInput) -> LoginPayload:
-        """Authenticate user with email and password"""
+    async def login(self, info, input: LoginInput, device_info: Optional[DeviceInfoInput] = None) -> LoginPayload:
+        """
+        Authenticate user with email and password.
+        Integrates OTP verification for enhanced security.
+        """
         try:
-            # Authenticate user
+            # 1. Authenticate user credentials
             user = await sync_to_async(authenticate)(
                 request=info.context.request,
                 username=input.email,  # Using email as username
@@ -62,6 +65,61 @@ class AuthMutation:
                         message="Your account is pending verification. Please check your email."
                     )
             
+            # 2. ✅ NEW: Check if OTP is required based on device trust and user role
+            requires_otp = await self._check_otp_requirement(user, device_info)
+            
+            if requires_otp:
+                # Send OTP and return otpRequired=true
+                print(f"🔐 OTP required for user: {user.email} (role: {user.role})")
+                
+                try:
+                    from otps.models import OTP, OTPVerificationLink
+                    from helpers.email_service import send_otp_email
+                    
+                    # Create OTP with 10-minute expiry
+                    otp, plain_code = await sync_to_async(OTP.create_otp)(user, 'signin', expiry_minutes=10)
+                    
+                    # Create verification link as fallback
+                    verification_link = await sync_to_async(OTPVerificationLink.create_verification_link)(
+                        user, 'signin', expiry_hours=1
+                    )
+                    
+                    # Send OTP email (send_otp_email is sync, wrap it)
+                    email_sent = await sync_to_async(send_otp_email)(
+                        to_email=user.email,
+                        otp_code=plain_code,
+                        verification_url=verification_link.token,
+                        username=user.email.split('@')[0]  # Use email prefix as username
+                    )
+                    
+                    if email_sent:
+                        print(f"✅ OTP sent to {user.email}")
+                        return LoginPayload(
+                            success=True,
+                            message=f"OTP sent to {user.email}. Please verify to continue.",
+                            otp_required=True,
+                            user=user  # Return basic user info for frontend
+                            # NO access_token - only provided after OTP verification
+                        )
+                    else:
+                        print(f"❌ Failed to send OTP email to {user.email}")
+                        return LoginPayload(
+                            success=False,
+                            message="Failed to send OTP email. Please try again."
+                        )
+                        
+                except Exception as otp_error:
+                    print(f"❌ OTP generation/sending failed: {str(otp_error)}")
+                    return LoginPayload(
+                        success=False,
+                        message=f"OTP system error: {str(otp_error)}"
+                    )
+            
+            # 3. OTP not required - proceed with direct login
+            print(f"✅ Direct login allowed for user: {user.email} (trusted device)")
+            # 3. OTP not required - proceed with direct login
+            print(f"✅ Direct login allowed for user: {user.email} (trusted device)")
+            
             # NOTE: Pure JWT authentication - no Django session management needed
             # We only use authenticate() for credential validation, not login() for sessions
             
@@ -70,15 +128,16 @@ class AuthMutation:
             user.is_sign_in = True
             await sync_to_async(user.save)(update_fields=['last_login', 'is_sign_in'])
             
-            # Generate JWT tokens
-            refresh = RefreshToken.for_user(user)
+            # Generate JWT tokens (wrap to avoid sync_to_async issues)
+            refresh = await sync_to_async(RefreshToken.for_user)(user)
             access_token = refresh.access_token
             
             # Set refresh token as HTTP-only cookie with enhanced security
             response = info.context.response
             if response:
                 SecureTokenManager.set_secure_jwt_cookies(
-                    response, str(access_token), str(refresh), info.context.request
+                    response, str(access_token), str(refresh), info.context.request,
+                    remember_me=input.remember_me
                 )
             
             # Return access token in response, refresh token will be set as HTTP-only cookie
@@ -88,20 +147,72 @@ class AuthMutation:
                 user=user,
                 access_token=str(access_token),
                 expires_in=int(settings.NINJA_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds()),
+                otp_required=False
             )
             
         except Exception as e:
+            print(f"❌ Login error: {str(e)}")
             return LoginPayload(
                 success=False,
                 message=f"Login failed: {str(e)}"
             )
+    
+    async def _check_otp_requirement(self, user, device_info) -> bool:
+        """
+        Check if OTP is required for this login attempt.
+        
+        OTP is required when:
+        - User is super_admin (ALWAYS requires OTP)
+        - No device info provided (security measure)
+        - First-time login (user.last_login is None)
+        - Device is not trusted
+        
+        OTP is NOT required when:
+        - Device is trusted (for non-super_admin users)
+        - User has logged in before from this device
+        """
+        # No device info - require OTP for security
+        if not device_info:
+            print(f"⚠️ No device info provided - requiring OTP for {user.email}")
+            return True
+        
+        # Super admin ALWAYS requires OTP (enhanced security)
+        if user.role == 'super_admin':
+            print(f"🔒 Super admin detected - requiring OTP for {user.email}")
+            return True
+        
+        # First-time login requires OTP
+        if user.last_login is None:
+            print(f"🆕 First-time login - requiring OTP for {user.email}")
+            return True
+        
+        # Check if device is trusted
+        from otps.models import TrustedDevice
+        device_fingerprint = TrustedDevice.generate_device_fingerprint(
+            device_info.ip_address,
+            device_info.user_agent
+        )
+        
+        # Wrap the ORM query call properly
+        is_trusted = await sync_to_async(
+            lambda: TrustedDevice.is_device_trusted(user, device_fingerprint)
+        )()
+        
+        if is_trusted:
+            print(f"✅ Trusted device detected - skipping OTP for {user.email}")
+            return False
+        else:
+            print(f"❌ Untrusted device - requiring OTP for {user.email}")
+            return True
     
     @strawberry.mutation
     async def sign_up(self, info, input: SignupInput) -> SignupPayload:
         """Register a new user account"""
         try:
             # Check if user already exists
-            existing_user = await sync_to_async(User.objects.filter(email=input.email).exists)()
+            existing_user = await sync_to_async(
+                lambda: User.objects.filter(email=input.email).exists()
+            )()
             if existing_user:
                 return SignupPayload(
                     success=False,
@@ -128,7 +239,9 @@ class AuthMutation:
             # Ensure username is unique
             original_username = username
             counter = 1
-            while await sync_to_async(User.objects.filter(username=username).exists)():
+            while await sync_to_async(
+                lambda u=username: User.objects.filter(username=u).exists()
+            )():
                 username = f"{original_username}{counter}"
                 counter += 1
             
@@ -198,7 +311,8 @@ class AuthMutation:
                 )
             
             print(f"✅ Validating refresh token (length: {len(token_to_use)})")
-            refresh = RefreshToken(token_to_use)
+            # Wrap RefreshToken instantiation with sync_to_async (checks blacklist DB)
+            refresh = await sync_to_async(RefreshToken)(token_to_use)
             print(f"✅ Refresh token validated successfully")
             
             # Get user from token
@@ -238,7 +352,7 @@ class AuthMutation:
             
             # Generate new tokens (rotation) with the same remember_me setting
             print(f"🔄 Generating new tokens for user: {user.email} (remember_me={remember_me})")
-            new_refresh = RefreshToken.for_user(user, remember_me=remember_me)
+            new_refresh = await sync_to_async(RefreshToken.for_user)(user, remember_me=remember_me)
             new_access_token = new_refresh.access_token
             print(f"✅ New tokens generated with lifetime: {(new_refresh.get('exp', 0) - current_time) / 86400:.1f} days")
             
@@ -316,7 +430,9 @@ class AuthMutation:
                 
                 if token_to_check:
                     try:
-                        token = RefreshToken(token_to_check)
+                        # SECURITY: Wrap RefreshToken instantiation to prevent async context errors
+                        # Blacklist check runs sync DB query - must use sync_to_async
+                        token = await sync_to_async(RefreshToken)(token_to_check)
                         user_id = token.get('user_id')
                         if user_id:
                             user = await sync_to_async(User.objects.get)(id=user_id)
@@ -339,7 +455,9 @@ class AuthMutation:
                 
                 if token_to_blacklist:
                     try:
-                        token = RefreshToken(token_to_blacklist)
+                        # SECURITY: Wrap RefreshToken instantiation to prevent async context errors
+                        # Blacklist check runs sync DB query - must use sync_to_async
+                        token = await sync_to_async(RefreshToken)(token_to_blacklist)
                         # Use sync_to_async for the blacklist operation
                         # Check if blacklist method is available
                         if hasattr(token, 'blacklist'):

@@ -11,36 +11,13 @@
 
 ### 2. 🎥 YouTube Data API v3 (Optional but Recommended)
 
-#### Get Your API Key (5 minutes):
-
-**Step A: Go to Google Cloud Console**
-- Open: https://console.cloud.google.com/
-
-**Step B: Create or Select a Project**
-1. Click the project dropdown at the top
-2. Click **"NEW PROJECT"**
-3. Name it: `SkillSync` or any name
-4. Click **"CREATE"**
-5. Wait ~10 seconds for project creation
-
-**Step C: Enable YouTube Data API v3**
-1. In the search bar at top, type: `YouTube Data API v3`
-2. Click on **"YouTube Data API v3"**
-3. Click the blue **"ENABLE"** button
-4. Wait for it to enable (~5 seconds)
-
-**Step D: Create API Key**
-1. Click **"Credentials"** in the left sidebar
-2. Click **"+ CREATE CREDENTIALS"** at the top
-3. Select **"API key"**
-4. Copy the API key that appears (starts with `AIzaSy...`)
-
-**Step E: (Optional) Restrict API Key**
-1. Click **"RESTRICT KEY"**
-2. Under "API restrictions":
-   - Select **"Restrict key"**
-   - Check only **"YouTube Data API v3"**
-3. Click **"SAVE"**
+#### Get Your API Key:
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select existing one
+3. Enable **YouTube Data API v3**: https://console.cloud.google.com/apis/library/youtube.googleapis.com
+4. Go to [Credentials](https://console.cloud.google.com/apis/credentials)
+5. Click **Create Credentials** → **API Key**
+6. Copy the API key
 
 #### Add to `.env`:
 ```bash
@@ -50,7 +27,7 @@ YOUTUBE_API_KEY=AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 #### Free Tier Limits:
 - ✅ **10,000 requests per day** (FREE)
 - Each video search = ~100 quota units
-- Enough for 500+ video lessons/day
+- ~100 searches per day free
 
 #### What if I don't add it?
 - Video lessons will still work
@@ -61,28 +38,12 @@ YOUTUBE_API_KEY=AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
 ### 3. 🖼️ Unsplash API (Optional)
 
-#### Get Your Access Key (5 minutes):
-
-**Step A: Go to Unsplash Developers**
-- Open: https://unsplash.com/developers
-
-**Step B: Create an Account (if needed)**
-1. Click **"Register as a developer"**
-2. Sign up with email or GitHub
-3. Verify your email
-
-**Step C: Create a New Application**
-1. Click **"Your apps"** in the top menu
-2. Click **"New Application"**
-3. Accept the API Guidelines (checkbox)
-4. Fill in the form:
-   - **Application name**: `SkillSync`
-   - **Description**: `AI-powered learning platform with personalized lessons`
-5. Click **"Create Application"**
-
-**Step D: Copy Access Key**
-1. You'll see **"Access Key"** on the app page
-2. Copy the key
+#### Get Your Access Key:
+1. Go to [Unsplash Developers](https://unsplash.com/developers)
+2. Sign up or log in
+3. Click **New Application**
+4. Accept terms → Create application
+5. Copy **Access Key**
 
 #### Add to `.env`:
 ```bash
@@ -92,7 +53,6 @@ UNSPLASH_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 #### Free Tier Limits:
 - ✅ **50 requests per hour** (FREE)
 - ✅ **5,000 requests per month** (FREE)
-- Enough for 1,200 images/day
 
 #### What if I don't add it?
 - Reading lessons will still work

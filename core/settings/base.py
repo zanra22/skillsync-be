@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     
     "corsheaders",  # Add CORS headers
     "ninja_jwt",
+    "ninja_jwt.token_blacklist",  # ✅ Token blacklist for security (rotation)
     "strawberry.django",
     "users",
     "profiles",

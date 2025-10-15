@@ -3,6 +3,7 @@ import strawberry_django
 from typing import Optional
 from django.contrib.auth import get_user_model
 from users.types import UserType  # Import UserType for use in payloads
+from otps.types import DeviceInfoInput  # Import DeviceInfoInput from otps (avoid duplicate)
 User = get_user_model()
 
 
@@ -29,6 +30,7 @@ class LoginPayload:
     access_token: Optional[str] = None
     # refresh_token removed - now stored in HTTP-only cookie
     expires_in: Optional[int] = None  # Token expiration time in seconds
+    otp_required: Optional[bool] = False  # ✅ NEW: OTP requirement flag
 
 @strawberry.type
 class SignupPayload:
