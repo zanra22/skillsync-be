@@ -28,6 +28,7 @@ class CompleteOnboardingInput:
     current_role: Optional[str] = None  # Current profession/role for working professionals
     industry: str
     career_stage: str
+    transition_timeline: Optional[str] = None  # Career transition timeline for career changers
     goals: List[LearningGoalInput]
     preferences: Optional[PreferencesInput] = None
 

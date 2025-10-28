@@ -98,7 +98,6 @@ class LessonGenerationService:
         # Async client instances (initialized lazily, closed on cleanup)
         self._deepseek_client = None
         self._groq_client = None
-        self._gemini_client = None
         
         # Validate critical APIs
         if not self.gemini_api_key:
@@ -138,20 +137,6 @@ class LessonGenerationService:
                 logger.debug("🧹 Closed Groq client")
             except Exception as e:
                 logger.debug(f"⚠️ Error closing Groq client: {e}")
-        
-        if self._gemini_client:
-            try:
-                # Gemini client may be synchronous or async depending on library; attempt async close, then sync
-                try:
-                    await self._gemini_client.close()
-                except Exception:
-                    try:
-                        self._gemini_client.close()
-                    except Exception:
-                        pass
-                logger.debug("🧹 Closed Gemini client")
-            except Exception as e:
-                logger.debug(f"⚠️ Error closing Gemini client: {e}")
     
     # ========================================
     # HYBRID AI GENERATION SYSTEM
@@ -601,50 +586,24 @@ class LessonGenerationService:
             else:
                 logger.info("ℹ️ [LessonGen] Multi-source research disabled - using AI-only generation")
             # Step 2: Route to appropriate generator (with research context)
-            # Patch: Extract source_attribution from research_data if present
-            def extract_source_attribution(research_data):
-                if not research_data or 'sources' not in research_data:
-                    return {}
-                sources = research_data['sources']
-                attribution = {}
-                # Official docs
-                doc = sources.get('official_docs')
-                if doc and isinstance(doc, dict) and doc.get('url'):
-                    attribution['official_docs'] = [doc['url']]
-                # Stack Overflow
-                so = sources.get('stackoverflow_answers', [])
-                attribution['stackoverflow'] = [a['question_url'] for a in so if a.get('question_url')]
-                # GitHub
-                gh = sources.get('github_examples', [])
-                attribution['github'] = [g['repo_url'] for g in gh if g.get('repo_url')]
-                # Dev.to
-                dev = sources.get('dev_articles', [])
-                attribution['devto'] = [d['url'] for d in dev if d.get('url')]
-                return attribution
-
-            # Route to appropriate generator, then inject source_attribution
             if request.learning_style == 'hands_on':
                 logger.info(f"🎓 [LessonGen] Routing to hands-on lesson generator for: {request.step_title}")
                 result = await self._generate_hands_on_lesson(request, research_data)
-                result['source_attribution'] = extract_source_attribution(research_data)
                 logger.info(f"🎓 [LessonGen] Hands-on lesson generated for: {request.step_title}")
                 return result
             elif request.learning_style == 'video':
                 logger.info(f"🎓 [LessonGen] Routing to video lesson generator for: {request.step_title}")
                 result = await self._generate_video_lesson(request, research_data)
-                result['source_attribution'] = extract_source_attribution(research_data)
                 logger.info(f"🎓 [LessonGen] Video lesson generated for: {request.step_title}")
                 return result
             elif request.learning_style == 'reading':
                 logger.info(f"🎓 [LessonGen] Routing to reading lesson generator for: {request.step_title}")
                 result = await self._generate_reading_lesson(request, research_data)
-                result['source_attribution'] = extract_source_attribution(research_data)
                 logger.info(f"🎓 [LessonGen] Reading lesson generated for: {request.step_title}")
                 return result
             elif request.learning_style == 'mixed':
                 logger.info(f"🎓 [LessonGen] Routing to mixed lesson generator for: {request.step_title}")
                 result = await self._generate_mixed_lesson(request, research_data)
-                result['source_attribution'] = extract_source_attribution(research_data)
                 logger.info(f"🎓 [LessonGen] Mixed lesson generated for: {request.step_title}")
                 return result
             else:
@@ -850,10 +809,7 @@ class LessonGenerationService:
         
         # Parse AI response
         lesson_data = self._parse_hands_on_response(response, request)
-
-        # Generate unique lesson description
-        lesson_data['summary'] = await self._generate_lesson_description(request, lesson_data.get('introduction', ''))
-
+        
         # Adjust content complexity based on user's time commitment
         if 'exercises' in lesson_data:
             lesson_data['exercises'] = self._adjust_content_complexity(
@@ -1086,10 +1042,7 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
                     'sources_used': research_data.get('summary', ''),
                     'source_type': 'multi_source'
                 }
-
-            # Generate unique lesson description
-            lesson_data['summary'] = await self._generate_lesson_description(request, lesson_data['summary'])
-
+            
             return lesson_data
         
         # Step 3: Gemini analyzes transcript (WITH RESEARCH CONTEXT!)
@@ -1108,10 +1061,7 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
             'quiz': analysis.get('quiz', []),
             'estimated_duration': video_data.get('duration_minutes', 15)
         }
-
-        # Generate unique lesson description
-        lesson_data['summary'] = await self._generate_lesson_description(request, lesson_data['summary'])
-
+        
         # Adjust content complexity based on user's time commitment
         if 'quiz' in lesson_data and lesson_data['quiz']:
             lesson_data['quiz'] = self._adjust_content_complexity(
@@ -1293,13 +1243,6 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
             time.sleep(wait_time)
         
         self.last_youtube_call = time.time()
-        # DB hygiene: close any old/stale DB connections before long network I/O
-        try:
-            from django.db import close_old_connections
-            close_old_connections()
-        except Exception:
-            # Best-effort: if Django isn't available in this execution context, continue
-            logger.debug("⚠️ close_old_connections() unavailable or failed - continuing")
         
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
@@ -1332,13 +1275,6 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
         
         Returns: Transcript text or None if failed
         """
-        # DB hygiene: close any old/stale DB connections before heavy subprocess/IO work
-        try:
-            from django.db import close_old_connections
-            close_old_connections()
-        except Exception:
-            logger.debug("⚠️ close_old_connections() unavailable or failed - continuing")
-
         if not self.groq_api_key:
             logger.info("ℹ️  Groq transcription skipped - GROQ_API_KEY not configured (optional)")
             return None
@@ -1611,9 +1547,6 @@ Generate the analysis now."""
             return self._generate_fallback_lesson(request)
         # Parse response
         lesson_data = self._parse_reading_response(response, request)
-
-        # Generate unique lesson description
-        lesson_data['summary'] = await self._generate_lesson_description(request, lesson_data.get('summary', ''))
 
         # --- Fetch and inject real GitHub star counts for code examples ---
         if lesson_data.get('code_examples'):
@@ -1945,34 +1878,6 @@ Generate the JSON array now:"""
             logger.error(f"❌ Diagram generation failed: {e}")
             return []
     
-    async def _generate_lesson_description(self, request: LessonRequest, lesson_content: str = "") -> str:
-        """
-        Generate a unique, AI-powered description for each lesson.
-
-        Makes each lesson description specific to the lesson number and content,
-        explaining what students will learn in this particular lesson.
-        """
-        prompt = '''Generate a unique, engaging description for lesson {lesson_number} on "{step_title}".
-
-This is part of a learning module. Make the description specific to this lesson and explain what students will learn.
-
-{lesson_content}
-
-Description should be 2-3 sentences, highlighting the key learning objectives for this specific lesson.
-
-Output only the description text, no quotes or extra formatting.'''.format(
-            lesson_number=request.lesson_number,
-            step_title=request.step_title,
-            lesson_content=f"Lesson content preview: {lesson_content[:300]}" if lesson_content else ""
-        )
-
-        try:
-            description = await self._generate_with_ai(prompt, max_tokens=200)
-            return description.strip() if description else f"Lesson {request.lesson_number} on {request.step_title}"
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to generate unique description: {e}")
-            return f"Lesson {request.lesson_number} on {request.step_title}"
-    
     def _get_unsplash_image(self, topic: str) -> Optional[Dict]:
         """
         Get hero image from Unsplash API.
@@ -2127,10 +2032,7 @@ Output as JSON with keys: summary, key_concepts[], timestamps[]"""
             
             'estimated_duration': self._calculate_lesson_duration(60, request.user_profile)  # Time-aware duration (mixed approach)
         }
-
-        # Generate unique lesson description
-        lesson_data['summary'] = await self._generate_lesson_description(request, lesson_data['summary'])
-
+        
         # Adjust content complexity based on user's time commitment
         if 'exercises' in lesson_data:
             lesson_data['exercises'] = self._adjust_content_complexity(

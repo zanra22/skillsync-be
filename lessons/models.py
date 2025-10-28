@@ -1,3 +1,117 @@
+from django.db import models
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+from django.core.validators import MinValueValidator, MaxValueValidator
+import hashlib
+from helpers.generate_short_id import generate_short_id
+User = get_user_model()
+
+class Roadmap(models.Model):
+    """
+    Represents a personalized learning roadmap for a user or goal.
+    Contains multiple modules, each with lessons.
+    """
+    # Identification
+    id = models.CharField(
+        max_length=10,
+        primary_key=True,
+        default=generate_short_id,
+        unique=True,
+    )
+    title = models.CharField(max_length=255, help_text="AI-generated roadmap title (e.g., 'Fullstack Python Developer')")
+    goal_input = models.CharField(max_length=255, help_text="Raw user goal input (used for caching and lookup)")
+    description = models.TextField(blank=True, help_text="Overview of the learning journey")
+    user_id = models.CharField(max_length=100, db_index=True, help_text="Reference to Django User.id")
+    goal_id = models.CharField(max_length=100, db_index=True, help_text="Reference to UserLearningGoal.id")
+    difficulty_level = models.CharField(max_length=30, choices=[('beginner', 'Beginner'), ('intermediate', 'Intermediate'), ('advanced', 'Advanced')], default='beginner')
+    total_duration = models.CharField(max_length=50, blank=True, help_text="Estimated completion time")
+    generated_at = models.DateTimeField(auto_now_add=True)
+    user_profile_snapshot = models.JSONField(default=dict, blank=True, help_text="User context when generated")
+    ai_model_version = models.CharField(max_length=50, default='gemini-2.0-flash-exp')
+    status = models.CharField(max_length=20, choices=[('active', 'Active'), ('completed', 'Completed'), ('archived', 'Archived')], default='active')
+    progress = models.JSONField(default=dict, blank=True, help_text="User progress tracking")
+
+
+    # Community voting & caching
+    upvotes = models.IntegerField(default=0)
+    downvotes = models.IntegerField(default=0)
+    approval_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pending Review'),
+            ('approved', 'Community Approved'),
+            ('rejected', 'Community Rejected'),
+            ('mentor_verified', 'Mentor Verified'),
+        ],
+        default='pending',
+        db_index=True
+    )
+    cache_key = models.CharField(max_length=64, db_index=True, blank=True)
+
+    @staticmethod
+    def generate_cache_key(title: str, user_id: str, goal_id: str, difficulty_level: str, ai_model_version: str = '', extra: str = '') -> str:
+        import hashlib
+        key_str = f"{title}:{user_id}:{goal_id}:{difficulty_level}:{ai_model_version}:{extra}"
+        return hashlib.md5(key_str.encode()).hexdigest()
+
+    class Meta:
+        verbose_name = "Roadmap"
+        verbose_name_plural = "Roadmaps"
+        ordering = ['-generated_at']
+
+    def __str__(self):
+        return self.title
+
+
+class Module(models.Model):
+    """
+    Represents a module within a roadmap. Each module contains multiple lessons.
+    """
+    id = models.CharField(
+        max_length=10,
+        primary_key=True,
+        default=generate_short_id,
+        unique=True,
+    )
+    roadmap = models.ForeignKey('Roadmap', on_delete=models.CASCADE, related_name='modules')
+    title = models.CharField(max_length=255, help_text="Module title (e.g., 'Python Basics')")
+    description = models.TextField(blank=True)
+    order = models.PositiveIntegerField(default=1, help_text="Order of module in roadmap")
+    estimated_duration = models.CharField(max_length=50, blank=True)
+    difficulty = models.CharField(max_length=30, choices=[('beginner', 'Beginner'), ('intermediate', 'Intermediate'), ('advanced', 'Advanced')], default='beginner')
+    # Resources will be populated after lesson generation (real links)
+    resources = models.JSONField(default=list, blank=True, help_text="Actual resource links used in lessons")
+
+
+    # Community voting & caching
+    upvotes = models.IntegerField(default=0)
+    downvotes = models.IntegerField(default=0)
+    approval_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pending Review'),
+            ('approved', 'Community Approved'),
+            ('rejected', 'Community Rejected'),
+            ('mentor_verified', 'Mentor Verified'),
+        ],
+        default='pending',
+        db_index=True
+    )
+    cache_key = models.CharField(max_length=64, db_index=True, blank=True)
+
+    @staticmethod
+    def generate_cache_key(roadmap_id: int, title: str, order: int, difficulty: str, extra: str = '') -> str:
+        import hashlib
+        key_str = f"{roadmap_id}:{title}:{order}:{difficulty}:{extra}"
+        return hashlib.md5(key_str.encode()).hexdigest()
+
+    class Meta:
+        verbose_name = "Module"
+        verbose_name_plural = "Modules"
+        ordering = ['roadmap', 'order']
+
+    def __str__(self):
+        return f"{self.roadmap.title} - {self.title}"
 """
 Lesson Content Models for SkillSync AI-Powered Learning Platform.
 
@@ -8,13 +122,7 @@ This module contains models for:
 - MentorReview: Mentor-specific reviews with higher trust weight
 """
 
-from django.db import models
-from django.contrib.auth import get_user_model
-from django.utils import timezone
-from django.core.validators import MinValueValidator, MaxValueValidator
-import hashlib
 
-User = get_user_model()
 
 
 class LessonContent(models.Model):
@@ -25,6 +133,13 @@ class LessonContent(models.Model):
     """
     
     # Identification
+    id = models.CharField(
+        max_length=10,
+        primary_key=True,
+        default=generate_short_id,
+        unique=True,
+    )
+    module = models.ForeignKey('Module', on_delete=models.CASCADE, related_name='lessons', null=True, blank=True, help_text="Module this lesson belongs to")
     roadmap_step_title = models.CharField(
         max_length=255,
         db_index=True,
@@ -59,7 +174,7 @@ class LessonContent(models.Model):
         help_text="Estimated time to complete (minutes)"
     )
     difficulty_level = models.CharField(
-        max_length=20,
+        max_length=30,
         choices=[
             ('beginner', 'Beginner'),
             ('intermediate', 'Intermediate'),
@@ -355,7 +470,12 @@ class LessonVote(models.Model):
     Track individual user votes on lessons.
     One vote per user per lesson (can change vote).
     """
-    
+    id = models.CharField(
+        max_length=10,
+        primary_key=True,
+        default=generate_short_id,
+        unique=True,
+    )
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -398,7 +518,12 @@ class UserRoadmapLesson(models.Model):
     Maps user's roadmap to specific lesson content versions.
     Tracks which version of the lesson the user is using and their progress.
     """
-    
+    id = models.CharField(
+        max_length=10,
+        primary_key=True,
+        default=generate_short_id,
+        unique=True,
+    )
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -477,7 +602,12 @@ class MentorReview(models.Model):
     Mentor-specific reviews carry more weight than community votes.
     Mentors can verify, reject, or suggest improvements.
     """
-    
+    id = models.CharField(
+        max_length=10,
+        primary_key=True,
+        default=generate_short_id,
+        unique=True,
+    )
     mentor = models.ForeignKey(
         User,
         on_delete=models.CASCADE,

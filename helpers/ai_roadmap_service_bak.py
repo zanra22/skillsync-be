@@ -1,6 +1,5 @@
 import logging
 from lessons.models import Roadmap as RoadmapModel, Module as ModuleModel, LessonContent as LessonModel
-import re
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 import json
@@ -107,37 +106,6 @@ class HybridRoadmapService:
         if not self.openrouter_api_key:
             logger.warning("⚠️ OPENROUTER_API_KEY not found - DeepSeek unavailable")
 
-    async def cleanup(self):
-        """
-        Best-effort cleanup for any async clients created by the HybridRoadmapService.
-        Call this before shutting down the event loop to avoid Windows Proactor finalizer warnings.
-        """
-        # Close DeepSeek/OpenRouter client
-        if getattr(self, '_deepseek_client', None):
-            try:
-                await self._deepseek_client.close()
-                logger.debug("🧹 Closed DeepSeek/OpenRouter client")
-            except Exception:
-                try:
-                    self._deepseek_client.close()
-                except Exception:
-                    pass
-            finally:
-                self._deepseek_client = None
-
-        # Close Groq client
-        if getattr(self, '_groq_client', None):
-            try:
-                await self._groq_client.close()
-                logger.debug("🧹 Closed Groq client")
-            except Exception:
-                try:
-                    self._groq_client.close()
-                except Exception:
-                    pass
-            finally:
-                self._groq_client = None
-
     async def generate_full_roadmap_modules_lessons(self, user_profile):
         """
         Generate a full roadmap, modules, and lessons for the given user profile.
@@ -169,23 +137,6 @@ class HybridRoadmapService:
         from helpers.ai_lesson_service import LessonGenerationService, LessonRequest
         import re
         lesson_service = LessonGenerationService()
-
-        # Ensure lesson_service clients are cleaned up on any exit path
-        try:
-            # --- Ensure total_duration is normalized to a short machine-friendly format ---
-            try:
-                raw_total = getattr(roadmap, 'total_duration', '') or ''
-                normalized_total = self._normalize_total_duration(raw_total)
-                if normalized_total != raw_total:
-                    logger.debug(f"[RoadmapSave] Normalized total_duration: '{raw_total}' -> '{normalized_total}'")
-                # write-back to the roadmap object if possible
-                try:
-                    setattr(roadmap, 'total_duration', normalized_total)
-                except Exception:
-                    # not critical if roadmap is a dict or immutable; we'll use normalized_total when persisting
-                    pass
-            except Exception:
-                normalized_total = ''
 
         # 1. Create or get roadmap
         goal_input = getattr(roadmap, 'skill_name', '')
@@ -254,9 +205,6 @@ class HybridRoadmapService:
             total_hours = parse_duration(getattr(step, 'estimated_duration', '2 weeks at 5 hours/week'))
             # Restore dynamic lesson count based on duration (as in working backup)
             lesson_count = max(1, min(6, (total_hours + 3) // 4))
-
-            # Improved: calculate per-lesson duration based on module total hours
-            lesson_duration = int((total_hours * 60) / lesson_count) if lesson_count > 0 else 60
             for lesson_num in range(1, lesson_count + 1):
                 lesson_title = getattr(step, 'title', f"Module {idx+1} Lesson {lesson_num}")
                 lesson_cache_key = LessonModel.generate_cache_key(
@@ -294,8 +242,6 @@ class HybridRoadmapService:
                         lesson_data['summary'] = getattr(step, 'description', '')
                     if 'content' not in lesson_data or not lesson_data['content']:
                         lesson_data['content'] = lesson_data.get('summary', getattr(step, 'description', ''))
-                    # Patch: set estimated_duration for each lesson based on module total hours and lesson count
-                    lesson_data['estimated_duration'] = lesson_duration
                     lesson_obj = await LessonModel.objects.acreate(
                         module=module_obj,
                         roadmap_step_title=module_obj.title,
@@ -304,7 +250,7 @@ class HybridRoadmapService:
                         content=lesson_data,
                         title=lesson_data.get('title', f"{module_obj.title} - Lesson {lesson_num}"),
                         description=lesson_data.get('summary', getattr(step, 'description', '')),
-                        estimated_duration=lesson_data['estimated_duration'],
+                        estimated_duration=lesson_data.get('estimated_duration', 30),
                         difficulty_level=step.difficulty,
                         cache_key=lesson_cache_key
                     )
@@ -315,12 +261,6 @@ class HybridRoadmapService:
             lessons_by_module[module_obj.title] = lessons
         logger.info(f"[RoadmapSave] Modules created: {len(modules)}. Lessons by module: {[ (k, len(v)) for k,v in lessons_by_module.items() ]}")
         return roadmap_obj, modules, lessons_by_module
-        finally:
-            # Best-effort cleanup of any async clients opened by LessonGenerationService
-            try:
-                await lesson_service.cleanup()
-            except Exception as e:
-                logger.debug(f"⚠️ Failed to cleanup lesson_service clients: {e}")
 
     async def generate_title_from_goal(self, goal_input: str) -> str:
         """
@@ -577,11 +517,6 @@ class HybridRoadmapService:
     async def _generate_single_roadmap(self, user_profile: UserProfile, goal: LearningGoal) -> Optional[LearningRoadmap]:
         logger.info(f"🤖 Generating roadmap for: {goal.skill_name}")
         prompt = self._create_roadmap_prompt(user_profile, goal)
-        # Enforce stricter output for total_duration at the prompt level to avoid long sentences
-        try:
-            prompt = self._enforce_total_duration_prompt(prompt)
-        except Exception:
-            pass
         try:
             # Try DeepSeek V3.1 (OpenRouter)
             if self.openrouter_api_key:
@@ -614,57 +549,6 @@ class HybridRoadmapService:
             return None
 
     async def _generate_with_deepseek_v31(self, prompt: str, max_tokens: int = 4096) -> str:
-
-        def _normalize_total_duration(self, raw_total: str) -> str:
-            """
-            Normalize an AI-provided total_duration into a concise, DB-safe format.
-
-            Expected outputs:
-            - "8-10 weeks"
-            - "5 weeks"
-
-            If the AI returned a sentence like "Approximately 8-10 weeks at your pace, ...",
-            this function will extract the numeric range or single number and format it.
-            Falls back to truncating the raw string to 50 chars if no numeric info is found.
-            """
-            if not raw_total or not isinstance(raw_total, str):
-                return ""
-
-            raw = raw_total.strip()
-            # 1) Range with hyphen: 8-10 weeks, 8 - 10 weeks, approximately 8-10 weeks
-            m = re.search(r"(\d{1,2})\s*-\s*(\d{1,2})\s*weeks?", raw, re.IGNORECASE)
-            if m:
-                a, b = m.group(1), m.group(2)
-                return f"{int(a)}-{int(b)} weeks"
-
-            # 2) Single number: '5 weeks' or '5 week'
-            m2 = re.search(r"(\d{1,2})\s*weeks?", raw, re.IGNORECASE)
-            if m2:
-                return f"{int(m2.group(1))} weeks"
-
-            # 3) If contains two numbers separated by space or words, use first two as range
-            nums = re.findall(r"\d{1,2}", raw)
-            if len(nums) >= 2:
-                return f"{int(nums[0])}-{int(nums[1])} weeks"
-            if len(nums) == 1:
-                return f"{int(nums[0])} weeks"
-
-            # 4) As a last resort, truncate to 50 chars to fit DB
-            return raw[:50]
-
-        def _enforce_total_duration_prompt(self, prompt: str) -> str:
-            """
-            Append a short instruction to the roadmap prompt to force the model to return
-            a concise machine-friendly `total_duration` value (e.g. "8-10 weeks" or "5 weeks").
-            """
-            if not prompt:
-                return prompt
-            instruction = (
-                "\n\nSTRICT OUTPUT INSTRUCTION: When you include the field `total_duration`,"
-                " output ONLY a short value in one of these formats: '8-10 weeks' or '5 weeks'."
-                " Do NOT output a sentence or extra commentary. Use digits and the word 'weeks'."
-            )
-            return prompt + instruction
         try:
             from openai import AsyncOpenAI
         except Exception as ie:
@@ -768,7 +652,6 @@ class HybridRoadmapService:
             '10+': 'immersive learning (3+ hours daily)'
         }
         time_guidance = time_mapping.get(user_profile.time_commitment, 'moderate study sessions')
-    # Note: callers will append a strict instruction to ensure total_duration is short and machine-friendly.
         return f"""You are an expert learning consultant and curriculum designer with 15+ years of experience in {user_profile.industry} industry training. Create a highly detailed, personalized learning roadmap that will transform this learner from their current level to their target proficiency.\n\nLEARNER PROFILE:\nRole: {user_profile.role} ({user_profile.career_stage} level)\nIndustry: {user_profile.industry}\nLearning Style: {user_profile.learning_style}\nWeekly Commitment: {user_profile.time_commitment} hours ({time_guidance})\n\nSPECIFIC LEARNING GOAL:\nSkill: {goal.skill_name}\nObjective: {goal.description}\nTarget Mastery: {goal.target_skill_level} level\nPriority: {goal.priority}/5 (higher = more urgent)\n\nINDUSTRY CONTEXT: {industry_note}\n\nLEARNING STYLE OPTIMIZATION: {style_instruction}\n\nCRITICAL REQUIREMENTS:\n1. Specificity: Provide exact resource names, tools, platforms, and websites\n2. Measurable Outcomes: Include specific skills/knowledge gained per step\n3. Industry Relevance: All content must align with {user_profile.industry} industry needs\n4. Time Optimization: Structure for {time_guidance}\n5. Progressive Difficulty: Each step builds logically on the previous one\n6. Real-world Application: Include practical projects and portfolio pieces\n\nRESOURCE QUALITY STANDARDS:\n- Only recommend resources that actually exist and are currently available\n- Prioritize well-rated, recent content (2020+)\n- Include mix of free and premium options\n- Specify exact course/book/tool names, not generic descriptions\n\nOUTPUT FORMAT (STRICT JSON):\n{{\n  \"skill_name\": \"{goal.skill_name}\",\n  \"description\": \"Compelling 2-sentence overview of the complete learning journey and career impact\",\n  \"total_duration\": \"realistic timeframe based on {user_profile.time_commitment} hours/week\",\n  \"difficulty_level\": \"{goal.target_skill_level}\",\n  \"steps\": [\n    {{\n      \"title\": \"Engaging step name that clearly states the milestone\",\n      \"description\": \"Detailed 3-4 sentence description of what learner will master, why it matters, and how it connects to their {user_profile.role} role\",\n      \"estimated_duration\": \"specific timeframe (e.g., '2 weeks at 5 hours/week')\",\n      \"difficulty\": \"beginner|intermediate|advanced\",\n      \"resources\": [\n        \"Exact resource name with author/platform (e.g., 'JavaScript: The Good Parts by Douglas Crockford')\",\n        \"Specific course title (e.g., 'React Complete Guide 2024 by Maximilian Schwarzmüller on Udemy')\",\n        \"Precise tool/website (e.g., 'CodePen.io for practice exercises')\"\n      ],\n      \"skills_covered\": [\n        \"Specific, measurable skill #1\",\n        \"Specific, measurable skill #2\",\n        \"Specific, measurable skill #3\"\n      ]\n    }}\n  ]\n}}\n\nVALIDATION CHECKLIST:\n- Each step has 3-5 specific, real resources\n- Skills covered are measurable and industry-relevant\n- Total duration matches weekly commitment\n- Resources match the {user_profile.learning_style} learning preference\n- Content progresses logically from {goal.target_skill_level} foundations to mastery\n- Industry context ({user_profile.industry}) is woven throughout\n\nCreate 4-6 progressive steps that will genuinely prepare this {user_profile.role} to excel with {goal.skill_name} in the {user_profile.industry} industry."""
 
 # Fallback and parse helpers (unchanged)

@@ -36,9 +36,15 @@ LOGGING = {
         'console': {
             'class': 'logging.StreamHandler',
         },
+        'roadmap_file': {
+            'class': 'logging.FileHandler',
+            'filename': 'roadmap_module_lesson.log',
+            'level': 'INFO',
+            'encoding': 'utf-8',
+        },
     },
     'root': {
-        'handlers': ['console'],
+        'handlers': ['console', 'roadmap_file'],
         'level': 'INFO',
     },
     'loggers': {
@@ -50,6 +56,11 @@ LOGGING = {
         'auth': {
             'handlers': ['console'],
             'level': 'DEBUG',
+            'propagate': False,
+        },
+        'ai_roadmap_service': {
+            'handlers': ['roadmap_file'],
+            'level': 'INFO',
             'propagate': False,
         },
     },

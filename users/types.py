@@ -1,7 +1,8 @@
 import strawberry
 import strawberry_django
 from django.contrib.auth import get_user_model
-from typing import Optional
+from typing import Optional, List
+from onboarding.types import LearningGoalInput as OnboardingLearningGoalInput
 from asgiref.sync import sync_to_async
 User = get_user_model()
 
@@ -18,7 +19,7 @@ class UserType:
     is_premium: strawberry.auto
     date_joined: strawberry.auto
     last_login: strawberry.auto
-    
+
     @strawberry.field
     async def profile(self) -> Optional['UserProfileType']:
         """Get user profile with onboarding status (async-safe)"""
@@ -26,7 +27,7 @@ class UserType:
             # Check if profile is already cached to avoid extra query
             if 'profile' in self._state.fields_cache:
                 return self._state.fields_cache['profile']
-            
+
             # Use sync_to_async to safely access profile relationship
             # This prevents "SynchronousOnlyOperation" error in async context
             profile_obj = await sync_to_async(lambda: getattr(self, 'profile', None))()
@@ -42,3 +43,34 @@ class UserProfileType:
     """Basic profile type for onboarding status"""
     onboarding_completed: bool
     onboarding_step: str
+
+
+@strawberry.input
+class _Unused_LearningGoalInput_Placeholder:
+    # The actual LearningGoalInput is defined in onboarding.types to avoid
+    # duplicate GraphQL input type definitions. This placeholder prevents
+    # accidental redefinition during refactors.
+    pass
+
+
+@strawberry.input
+class CompleteOnboardingInput:
+    user: UserType
+    role: str
+    firstName: str
+    lastName: str
+    currentRole: str
+    industry: str
+    careerStage: str
+    transitionTimeline: Optional[str] = None
+    goals: Optional[List[OnboardingLearningGoalInput]] = None
+    learningStyle: Optional[str] = None
+    timeCommitment: Optional[str] = None
+
+
+@strawberry.type
+class OnboardingResponse:
+    success: bool
+    message: str
+    user: Optional[UserType]
+    roadmaps: str  # JSON string of roadmaps data

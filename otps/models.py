@@ -495,7 +495,8 @@ class OTP(models.Model):
             purpose=purpose,
             expires_at=timezone.now() + timedelta(minutes=expiry_minutes)
         )
-        
+        # DEBUG: Print OTP code for testing (REMOVE AFTER TESTING)
+        print(f"[DEBUG] Generated OTP for {user.email}: {plain_code}")
         # Return both OTP instance and plain code (for sending via email)
         return otp, plain_code
 

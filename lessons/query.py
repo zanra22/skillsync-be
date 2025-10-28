@@ -1,3 +1,82 @@
+
+# === Roadmap & Module Queries ===
+import strawberry
+from typing import List, Optional
+from asgiref.sync import sync_to_async
+from .models import Roadmap, Module
+from .types import RoadmapType, ModuleType
+
+@strawberry.type
+class RoadmapQuery:
+    @strawberry.field
+    async def get_or_generate_roadmap(
+        self,
+        info,
+        title: str,
+        user_id: str,
+        goal_id: str,
+        difficulty_level: str = 'beginner',
+        ai_model_version: str = '',
+        extra: str = ''
+    ) -> RoadmapType:
+        cache_key = Roadmap.generate_cache_key(title, user_id, goal_id, difficulty_level, ai_model_version, extra)
+        roadmaps = await sync_to_async(list)(
+            Roadmap.objects.filter(cache_key=cache_key).order_by('-upvotes', '-approval_status', '-generated_at')
+        )
+        if roadmaps:
+            return roadmaps[0]
+        # If not found, create new roadmap (simplified, real generation logic can be added)
+        roadmap = await sync_to_async(Roadmap.objects.create)(
+            title=title,
+            user_id=user_id,
+            goal_id=goal_id,
+            difficulty_level=difficulty_level,
+            ai_model_version=ai_model_version,
+            cache_key=cache_key
+        )
+        return roadmap
+
+    @strawberry.field
+    async def get_or_generate_module(
+        self,
+        info,
+        roadmap_id: int,
+        title: str,
+        order: int = 1,
+        difficulty: str = 'beginner',
+        extra: str = ''
+    ) -> ModuleType:
+        cache_key = Module.generate_cache_key(roadmap_id, title, order, difficulty, extra)
+        modules = await sync_to_async(list)(
+            Module.objects.filter(cache_key=cache_key).order_by('-upvotes', '-approval_status', 'order')
+        )
+        if modules:
+            return modules[0]
+        module = await sync_to_async(Module.objects.create)(
+            roadmap_id=roadmap_id,
+            title=title,
+            order=order,
+            difficulty=difficulty,
+            cache_key=cache_key
+        )
+        return module
+    @strawberry.field
+    async def get_roadmap_by_id(self, info, roadmap_id: int) -> Optional[RoadmapType]:
+        roadmap = await sync_to_async(Roadmap.objects.prefetch_related('modules').get)(id=roadmap_id)
+        return roadmap
+
+    @strawberry.field
+    async def list_roadmaps(self, info, user_id: Optional[str] = None) -> List[RoadmapType]:
+        if user_id:
+            roadmaps = await sync_to_async(list)(Roadmap.objects.filter(user_id=user_id).order_by('-generated_at'))
+        else:
+            roadmaps = await sync_to_async(list)(Roadmap.objects.all().order_by('-generated_at'))
+        return roadmaps
+
+    @strawberry.field
+    async def get_modules_by_roadmap(self, info, roadmap_id: int) -> List[ModuleType]:
+        modules = await sync_to_async(list)(Module.objects.filter(roadmap_id=roadmap_id).order_by('order'))
+        return modules
 """
 Lessons GraphQL Queries
 

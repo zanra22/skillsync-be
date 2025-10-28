@@ -1,3 +1,102 @@
+# === Roadmap & Module Voting Mutations ===
+import strawberry
+from asgiref.sync import sync_to_async
+from .models import Roadmap, Module
+from .types import RoadmapType, ModuleType
+
+@strawberry.type
+class RoadmapVotingMutation:
+    @strawberry.mutation
+    async def vote_roadmap(
+        self,
+        info,
+        roadmap_id: int,
+        vote_type: str
+    ) -> RoadmapType:
+        roadmap = await sync_to_async(Roadmap.objects.get)(id=roadmap_id)
+        if vote_type == 'upvote':
+            roadmap.upvotes += 1
+        elif vote_type == 'downvote':
+            roadmap.downvotes += 1
+        await sync_to_async(roadmap.save)()
+        return roadmap
+
+    @strawberry.mutation
+    async def vote_module(
+        self,
+        info,
+        module_id: int,
+        vote_type: str
+    ) -> ModuleType:
+        module = await sync_to_async(Module.objects.get)(id=module_id)
+        if vote_type == 'upvote':
+            module.upvotes += 1
+        elif vote_type == 'downvote':
+            module.downvotes += 1
+        await sync_to_async(module.save)()
+        return module
+
+# === Roadmap & Module Mutations ===
+import strawberry
+from typing import Optional, List
+from asgiref.sync import sync_to_async
+from .models import Roadmap, Module
+from .types import RoadmapType, ModuleType
+
+@strawberry.type
+class RoadmapMutation:
+    @strawberry.mutation
+    async def create_roadmap(
+        self,
+        info,
+        title: str,
+        description: str,
+        user_id: str,
+        goal_id: str,
+        difficulty_level: str = 'beginner',
+        total_duration: str = '',
+        user_profile_snapshot: Optional[dict] = None,
+        ai_model_version: str = 'gemini-2.0-flash-exp',
+        status: str = 'active',
+        progress: Optional[dict] = None
+    ) -> RoadmapType:
+        roadmap = await sync_to_async(Roadmap.objects.create)(
+            title=title,
+            description=description,
+            user_id=user_id,
+            goal_id=goal_id,
+            difficulty_level=difficulty_level,
+            total_duration=total_duration,
+            user_profile_snapshot=user_profile_snapshot or {},
+            ai_model_version=ai_model_version,
+            status=status,
+            progress=progress or {}
+        )
+        return roadmap
+
+    @strawberry.mutation
+    async def create_module(
+        self,
+        info,
+        roadmap_id: int,
+        title: str,
+        description: str = '',
+        order: int = 1,
+        estimated_duration: str = '',
+        difficulty: str = 'beginner',
+        resources: Optional[List[str]] = None
+    ) -> ModuleType:
+        roadmap = await sync_to_async(Roadmap.objects.get)(id=roadmap_id)
+        module = await sync_to_async(Module.objects.create)(
+            roadmap=roadmap,
+            title=title,
+            description=description,
+            order=order,
+            estimated_duration=estimated_duration,
+            difficulty=difficulty,
+            resources=resources or []
+        )
+        return module
 """
 Lessons GraphQL Mutations
 

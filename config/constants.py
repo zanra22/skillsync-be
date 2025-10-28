@@ -67,8 +67,8 @@ DATABASE_CONFIG = DATABASES.get(ENVIRONMENT)
 print(f"Database Config: {DATABASE_CONFIG}")
 # Django Ninja JWT Configuration - MAXIMUM SECURITY
 NINJA_JWT_CONFIG = {
-    # CRITICAL: Very short access token lifetime (5 minutes)
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
+    # Increased access token lifetime for onboarding/lesson generation (30 minutes)
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
     
     # Refresh token lifetime (7 days max recommended)
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
@@ -132,5 +132,5 @@ EMAIL_CONFIG = {
 
 # Get current email config
 EMAIL_SETTINGS = EMAIL_CONFIG.get(ENVIRONMENT, EMAIL_CONFIG["development"])
-
+print(f"Email Config: {EMAIL_SETTINGS}")
 print(NINJA_JWT_CONFIG)

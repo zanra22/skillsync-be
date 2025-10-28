@@ -1,9 +1,34 @@
-"""
-Strawberry GraphQL types for Lessons
-"""
 import strawberry
 from typing import Optional, List
 from datetime import datetime
+# === Roadmap & Module Types ===
+@strawberry.type
+class ModuleType:
+    id: int
+    roadmap_id: int
+    title: str
+    description: str
+    order: int
+    estimated_duration: str
+    difficulty: str
+    resources: strawberry.scalars.JSON
+
+@strawberry.type
+class RoadmapType:
+    id: int
+    title: str
+    description: str
+    user_id: str
+    goal_id: str
+    difficulty_level: str
+    total_duration: str
+    generated_at: datetime
+    user_profile_snapshot: strawberry.scalars.JSON
+    ai_model_version: str
+    status: str
+    progress: strawberry.scalars.JSON
+    modules: List[ModuleType]
+
 
 
 @strawberry.type

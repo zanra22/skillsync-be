@@ -8,10 +8,18 @@ from .choices import (
     OnboardingStep,
     GoalStatus
 )
+from helpers.generate_short_id import generate_short_id
+
 User = get_user_model()
 
 # Create your models here.
 class UserProfile(models.Model):
+    id = models.CharField(
+        max_length=10,
+        primary_key=True,
+        default=generate_short_id,
+        unique=True,
+    )
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     first_name = models.CharField(max_length=150, blank=False)
     last_name = models.CharField(max_length=150, blank=False)
@@ -51,6 +59,25 @@ class UserProfile(models.Model):
     years_of_experience = models.PositiveIntegerField(null=True, blank=True)
     
     learning_goals = models.TextField(max_length=1000, blank=True)
+    
+    # Learning preferences (from onboarding)
+    learning_style = models.CharField(
+        max_length=20, 
+        blank=True,
+        help_text="Preferred learning style: hands_on, video, reading, mixed"
+    )
+    time_commitment = models.CharField(
+        max_length=10, 
+        blank=True,
+        help_text="Weekly time commitment: 1-3, 3-5, 5-10, 10+"
+    )
+    
+    # Career transition information (for career changers)
+    transition_timeline = models.CharField(
+        max_length=15,
+        blank=True,
+        help_text="Career transition timeline: immediate, 6_months, 1_year, long_term"
+    )
     
     # Mentorship Information (for mentors)
     mentorship_status = models.CharField(

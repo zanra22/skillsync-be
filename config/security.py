@@ -10,8 +10,8 @@ def get_secure_jwt_settings(secret_key, debug=False):
     Get JWT security configuration
     """
     return {
-        # CRITICAL: Very short access token lifetime (5 minutes)
-        'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
+    # Increased access token lifetime for onboarding/lesson generation (1 hour)
+        'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
         
         # Refresh token lifetime (7 days max recommended)
         'REFRESH_TOKEN_LIFETIME': timedelta(days=7),

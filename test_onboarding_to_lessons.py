@@ -22,7 +22,7 @@ sys.path.append(str(Path(__file__).parent))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings.dev')
 django.setup()
 
-from helpers.ai_roadmap_service import gemini_ai_service, UserProfile as AIUserProfile, LearningGoal
+from helpers.ai_roadmap_service import UserProfile as AIUserProfile, LearningGoal
 from helpers.ai_lesson_service import LessonGenerationService, LessonRequest
 from dataclasses import dataclass
 

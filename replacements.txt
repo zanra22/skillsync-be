@@ -1,0 +1,11 @@
+﻿# replacements.txt used for git-filter-repo to remove secrets
+# DO NOT commit real secrets here. This file previously contained a leaked Resend API key
+# which has now been removed from history. Keep this file as a template only.
+
+# Example format (do NOT include the actual secret):
+# literal:<SECRET_TO_REMOVE>==>[REDACTED]
+
+# If you need to run git-filter-repo again, populate replacements.txt locally (not committed)
+# with the exact literal to replace, then run:
+# python -m git_filter_repo --force --replace-text replacements.txt
+

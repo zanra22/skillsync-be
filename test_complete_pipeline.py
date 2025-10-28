@@ -88,6 +88,19 @@ async def test_complete_pipeline():
         results = []
         start_time = datetime.now()
         
+        # Define a default test user profile for all lesson requests
+        test_user_profile = {
+            'role': 'Test User',
+            'current_role': 'Test User',
+            'career_stage': 'mid',
+            'transition_timeline': '6-12_months',
+            'industry': 'technology',
+            'experience_level': 'intermediate',
+            'time_commitment': '5-10',
+            'learning_style': 'mixed',
+            'goals': 'Master Python for career advancement'
+        }
+
         for idx, test in enumerate(test_topics, 1):
             print(f"\n{'='*80}")
             print(f"  TEST {idx}/3: {test['topic']} ({test['language']})")
@@ -100,6 +113,7 @@ async def test_complete_pipeline():
                     step_title=test['topic'],
                     lesson_number=idx,
                     learning_style='mixed',
+                    user_profile=test_user_profile,
                     difficulty='beginner',
                     category=None,  # Let service infer
                     programming_language=test['language'],

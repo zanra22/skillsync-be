@@ -4,25 +4,22 @@ Test script to send actual emails via Resend.com
 This bypasses Django's development console backend to test real email delivery.
 """
 import os
-import django
-from pathlib import Path
-
-# Setup Django
-BASE_DIR = Path(__file__).resolve().parent
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings.base')
-django.setup()
 
 def test_resend_direct():
     """Test Resend API directly without Django settings override"""
     try:
         import resend
-        
-        # Set API key directly (replace with your actual key)
-        resend.api_key = "re_g33y1aGk_CyhMaXnUUu32fSJ6cSVAGeM7"
+
+        # Read API key from environment to avoid committing secrets
+        resend_api_key = os.environ.get('RESEND_API_KEY')
+        if not resend_api_key:
+            print("❌ RESEND_API_KEY not set in environment. Aborting direct test.")
+            return False
+        resend.api_key = resend_api_key
         
         # Test email data
         email_data = {
-            "from": "SkillSync Test <test@skillsync.studio>",
+            "from": "SkillSync Test <supportdev@skillsync.studio>",
             "to": ["arnazdj69@gmail.com"],
             "subject": "SkillSync - Resend Test Email",
             "html": """
@@ -93,13 +90,16 @@ def test_resend_direct():
         # Send email
         print("📧 Sending test email via Resend.com...")
         response = resend.Emails.send(email_data)
-        
-        print(f"✅ Email sent successfully!")
-        print(f"📨 Email ID: {response.get('id')}")
-        print(f"📍 Sent to: arnazdj69@gmail.com")
-        print(f"🕒 Check your Gmail inbox (including spam folder)")
-        
-        return True
+        print(f"Resend API response (direct): {response}")
+        if response.get('id'):
+            print(f"✅ Email sent successfully!")
+            print(f"📨 Email ID: {response.get('id')}")
+            print(f"📍 Sent to: arnazdj69@gmail.com")
+            print(f"🕒 Check your Gmail inbox (including spam folder)")
+            return True
+        else:
+            print(f"❌ Resend API did not return an email ID. Response: {response}")
+            return False
         
     except ImportError:
         print("❌ Resend package not installed. Run: pip install resend")
@@ -111,31 +111,53 @@ def test_resend_direct():
 def test_django_email_service():
     """Test our Django email service with forced Resend usage"""
     try:
+        import os
+        import sys
+        # Add backend root to sys.path so 'core' is importable
+        backend_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        sys.path.insert(0, backend_root)
+        os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings.dev')
+        import django
+        django.setup()
         from helpers.email_service import send_email_with_resend
-        
         print("📧 Testing Django email service with Resend...")
-        
-        success = send_email_with_resend(
-            to_email="arnazdj69@gmail.com",
-            subject="SkillSync - Django Service Test",
-            html_content="""
-            <h2>Django Email Service Test</h2>
-            <p>This email was sent through the Django email service using Resend.com!</p>
-            <div style="background: #4F46E5; color: white; padding: 10px; text-align: center; border-radius: 5px;">
-                <strong>Integration Working! 🎉</strong>
-            </div>
-            """,
-            text_content="Django Email Service Test\n\nThis email was sent through the Django email service using Resend.com!\n\nIntegration Working! 🎉"
-        )
-        
-        if success:
-            print("✅ Django email service test successful!")
-            print("📍 Check your Gmail inbox")
-        else:
-            print("❌ Django email service test failed")
-            
-        return success
-        
+        # Patch: call and print response directly
+        from helpers.email_service import send_email_with_resend
+        print("📧 Testing Django email service with Resend...")
+        try:
+            import resend
+            # Require RESEND_API_KEY in environment; do not use hardcoded default
+            resend_api_key = os.environ.get('RESEND_API_KEY')
+            if not resend_api_key:
+                print("❌ RESEND_API_KEY not set in environment. Aborting Django email service test.")
+                return False
+            resend.api_key = resend_api_key
+            email_data = {
+                "from": "SkillSync Test <dev@skillsync.studio>",
+                "to": ["arnazdj69@gmail.com"],
+                "subject": "SkillSync - Django Service Test",
+                "html": """
+                <h2>Django Email Service Test</h2>
+                <p>This email was sent through the Django email service using Resend.com!</p>
+                <div style=\"background: #4F46E5; color: white; padding: 10px; text-align: center; border-radius: 5px;\">
+                    <strong>Integration Working! 🎉</strong>
+                </div>
+                """,
+                "text": "Django Email Service Test\n\nThis email was sent through the Django email service using Resend.com!\n\nIntegration Working! 🎉"
+            }
+            response = resend.Emails.send(email_data)
+            print(f"Resend API response (django): {response}")
+            if response.get('id'):
+                print("✅ Django email service test successful!")
+                print(f"� Email ID: {response.get('id')}")
+                print("�📍 Check your Gmail inbox")
+                return True
+            else:
+                print(f"❌ Resend API did not return an email ID. Response: {response}")
+                return False
+        except Exception as e:
+            print(f"❌ Error testing Django email service: {str(e)}")
+            return False
     except Exception as e:
         print(f"❌ Error testing Django email service: {str(e)}")
         return False

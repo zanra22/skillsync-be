@@ -1,1 +1,1 @@
-web: gunicorn --bind=0.0.0.0 --timeout 600 core.wsgi:application
+web: gunicorn --bind=0.0.0.0 --timeout 3600 core.wsgi:application

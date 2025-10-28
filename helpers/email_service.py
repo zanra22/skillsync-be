@@ -59,9 +59,13 @@ def send_email_with_resend(
         
         # Send email
         response = resend.Emails.send(email_data)
-        
-        logger.info(f"Email sent successfully to {to_email} via Resend. ID: {response.get('id')}")
-        return True
+        logger.info(f"Resend API full response for {to_email}: {response}")
+        if response.get('id'):
+            logger.info(f"Email sent successfully to {to_email} via Resend. ID: {response.get('id')}")
+            return True
+        else:
+            logger.error(f"Resend API did not return an email ID. Response: {response}")
+            return False
         
     except ImportError:
         logger.error("Resend package not installed. Install with: pip install resend")
