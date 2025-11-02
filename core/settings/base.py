@@ -110,6 +110,7 @@ USE_TZ = True
 # AWS_S3_FILE_OVERWRITE = False
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
