@@ -1,4 +1,3 @@
-from helpers.github_api import GitHubAPIService
 """
 AI-Powered Lesson Generation Service
 
@@ -9,24 +8,16 @@ Generates personalized lessons based on learning style:
 - mixed: Combination of all approaches
 
 Uses:
-        # Gemini API successful response analysis
-        lesson_data = {
-            'type': 'video',  # REQUIRED: type field
-            'lesson_type': 'video',
-            'title': video_data['title'],
-            'summary': analysis.get('summary', video_data['description'][:300]),
-            'video': video_data,
-            'key_concepts': analysis.get('key_concepts', []),
-            'timestamps': analysis.get('timestamps', []),
-            'study_guide': analysis.get('study_guide', ''),
-            'quiz': analysis.get('quiz', []),
-            'estimated_duration': video_data.get('duration_minutes', 15)
-        } for text generation
+- DeepSeek V3.1 (primary) for text generation
+- Groq Llama 3.3 70B (fallback) for text generation
+- Gemini 2.0 Flash (backup) for text generation
 - YouTube Data API v3 for video search (FREE)
 - YouTube Transcript API for captions (FREE)
 - Unsplash API for hero images (FREE)
 - Mermaid.js for diagrams (client-side rendering)
 """
+
+from helpers.github_api import GitHubAPIService
 
 import os
 import json
@@ -79,9 +70,10 @@ class LessonGenerationService:
         self.research_engine = multi_source_research_engine
         logger.info("🔬 Multi-source research engine initialized")
         
-        # API URLs - Use Gemini 2.5 Flash (latest free tier model)
-        # Free tier includes: Gemini 2.5 Pro, 2.5 Flash, 2.5 Flash-Lite
-        self.gemini_api_url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent'
+        # API URLs - Use Gemini 2.0 Flash Experimental (stable, free tier)
+        # Free tier: 15 RPM, 200 RPD (better RPM than 2.5 Flash which has 10 RPM)
+        # Stick with 2.0 for now - higher RPM is critical for our fallback system
+        self.gemini_endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent'
         
         # Model usage tracking
         self._model_usage = {
@@ -92,9 +84,9 @@ class LessonGenerationService:
         
         # Rate limiting tracking
         self._last_deepseek_call = None  # DeepSeek: 20 req/min = 3s intervals
-        self._last_gemini_call = None    # Gemini: 10 req/min = 6s intervals
-        # Groq: No rate limiting needed (14,400 req/day = unlimited for our use)
-        
+        self._last_gemini_call = None    # Gemini 2.0 Flash: 10 req/min = 6s intervals
+        # Groq: No rate limiting needed (14,400 req/day is very generous)
+
         # Async client instances (initialized lazily, closed on cleanup)
         self._deepseek_client = None
         self._groq_client = None
@@ -294,7 +286,7 @@ class LessonGenerationService:
     async def _generate_with_gemini(self, prompt: str, json_mode: bool = False, max_tokens: int = 8000) -> str:
         """
         Gemini 2.0 Flash (FREE tier)
-        
+
         Model: gemini-2.0-flash-exp
         Free Tier: 1,500 requests/day, 10 req/min
         Quality: Good (71.9% HumanEval)
@@ -304,7 +296,7 @@ class LessonGenerationService:
         import google.generativeai as genai
         from datetime import datetime
         import asyncio
-        
+
         # Rate limiting: 10 req/min = 6 seconds per request
         if self._last_gemini_call:
             elapsed = (datetime.now() - self._last_gemini_call).total_seconds()
@@ -312,26 +304,28 @@ class LessonGenerationService:
                 wait_time = 6 - elapsed
                 logger.info(f"⏱️ Gemini rate limit: waiting {wait_time:.1f}s")
                 await asyncio.sleep(wait_time)
-        
+
         self._last_gemini_call = datetime.now()
-        # --- Global async rate limiting for all AI calls --- 
-        # Prevent accidental burst requests across all models (conservative: 1.2s between calls) 
-        if not hasattr(self, '_last_global_ai_call'): 
-            self._last_global_ai_call = None 
-        import asyncio 
-        from datetime import datetime 
-        min_interval = 1.2  # seconds (conservative for all providers) 
-        if self._last_global_ai_call: 
-            elapsed = (datetime.now() - self._last_global_ai_call).total_seconds() 
-            if elapsed < min_interval: 
-                wait_time = min_interval - elapsed 
-                logger.info(f"⏱️ [RateLimit] Global AI call: waiting {wait_time:.2f}s to avoid 429s") 
-                await asyncio.sleep(wait_time) 
-        self._last_global_ai_call = datetime.now() 
-        # ...existing code for Gemini API call...
-        # The actual Gemini API call and response assignment should be here.
-        # Example placeholder (replace with actual Gemini API call):
-        response = type('obj', (object,), {'text': ''})()  # Dummy response for linting
+
+        # Configure Gemini
+        genai.configure(api_key=self.gemini_api_key)
+
+        # Create model
+        generation_config = {
+            "temperature": 0.7,
+            "max_output_tokens": max_tokens,
+        }
+
+        if json_mode:
+            generation_config["response_mime_type"] = "application/json"
+
+        model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash-exp",
+            generation_config=generation_config
+        )
+
+        # Generate content
+        response = await model.generate_content_async(prompt)
         return response.text
     
     def get_model_usage_stats(self) -> Dict[str, int]:
@@ -585,13 +579,14 @@ class LessonGenerationService:
         - Backup: Gemini 2.0 Flash (FREE 50 req/day)
         """
         logger.info(f"🎓 [LessonGen] Generating lesson: {request.step_title} - Lesson {request.lesson_number} ({request.learning_style})")
+
         try:
-            logger.info(f"🎓 [LessonGen] Starting lesson generation for: {request.step_title} - Lesson {request.lesson_number}")
-            # Step 1: Run multi-source research BEFORE generation
+            # Step 1: Run multi-source research (if enabled)
             research_data = None
             if request.enable_research:
-                logger.info(f"🔬 [LessonGen] Starting multi-source research for: {request.step_title}")
+                logger.info("🔬 [LessonGen] Starting multi-source research...")
                 research_data = await self._run_research(request)
+
                 if research_data:
                     research_summary = research_data.get('summary', 'No summary')
                     research_time = research_data.get('research_time_seconds', 0)
@@ -600,8 +595,9 @@ class LessonGenerationService:
                     logger.warning("⚠️ [LessonGen] Research failed or returned no data - proceeding with AI-only generation")
             else:
                 logger.info("ℹ️ [LessonGen] Multi-source research disabled - using AI-only generation")
+
             # Step 2: Route to appropriate generator (with research context)
-            # Patch: Extract source_attribution from research_data if present
+            # Helper function to extract source attribution from research data
             def extract_source_attribution(research_data):
                 if not research_data or 'sources' not in research_data:
                     return {}
@@ -775,8 +771,8 @@ class LessonGenerationService:
             
             # Web frameworks/libraries (check BEFORE generic JS/TS)
             'vue': ['vue', 'vuejs', 'vue.js', 'vue component'],
-            'jsx': ['react', ' jsx ', 'react native', 'react hook'],  # React uses JSX
-            
+            'javascript': ['react', 'react hook'],  # React uses JSX
+
             # Core programming languages
             'python': ['python', ' py ', 'django', 'flask', 'fastapi', 'pandas', 'numpy'],
             'typescript': ['typescript', ' ts ', 'angular'],  # Angular uses TypeScript
@@ -1674,31 +1670,6 @@ Generate the analysis now."""
         logger.info(f"✅ Reading lesson generated: {len(lesson_data.get('content', ''))} characters")
 
         return lesson_data
-        
-        if not response:
-            return self._generate_fallback_lesson(request)
-        
-        # Parse response
-        lesson_data = self._parse_reading_response(response, request)
-        
-        # Generate diagrams separately (better success rate)
-        if lesson_data.get('content'):
-            content_summary = lesson_data['content'][:500]  # First 500 chars for context
-            diagrams = self._generate_diagrams(request.step_title, content_summary)
-            lesson_data['diagrams'] = diagrams
-        else:
-            lesson_data['diagrams'] = []
-        
-        # Add hero image
-        lesson_data['hero_image'] = self._get_unsplash_image(request.step_title)
-        
-        # Add metadata
-        lesson_data['lesson_type'] = 'reading'
-        lesson_data['estimated_duration'] = self._calculate_lesson_duration(30, request.user_profile)  # Time-aware duration
-        
-        logger.info(f"✅ Reading lesson generated: {len(lesson_data.get('content', ''))} characters")
-        
-        return lesson_data
     
     def _create_reading_prompt(self, request: LessonRequest, research_data: Optional[Dict] = None) -> str:
         """Create Gemini prompt for reading lesson - optimized for reliable JSON output with research context"""
@@ -2143,13 +2114,7 @@ Output as JSON with keys: summary, key_concepts[], timestamps[]"""
                 lesson_data['quiz'], 
                 request.user_profile
             )
-        
-        # Log video analysis status
-        if video_analysis:
-            logger.info(f"✅ Mixed lesson with video analysis: {len(video_analysis.get('key_concepts', []))} concepts from transcript")
-        else:
-            logger.info(f"✅ Mixed lesson generated with {len(lesson_data['exercises'])} exercises (video without transcript)")
-        
+
         # Add research metadata
         if research_data:
             lesson_data['research_metadata'] = {
@@ -2161,222 +2126,170 @@ Output as JSON with keys: summary, key_concepts[], timestamps[]"""
             lesson_data['research_metadata'] = {
                 'source_type': 'ai_only'
             }
-        
+
+        logger.info(f"✅ Mixed lesson generated successfully")
+
         return lesson_data
-    
-    def _create_mixed_text_prompt(self, request: LessonRequest) -> str:
-        """Create prompt for text portion of mixed lesson"""
-        return f"""Create a concise introduction for: "{request.step_title}" (500-800 words max).
 
-Include:
-- Summary (2-3 sentences)
-- Key concepts (5-7 points)
-- One Mermaid.js diagram
-- 5 quiz questions
-
-Output as JSON with keys: summary, introduction, key_concepts, diagrams[], quiz[]"""
-    
-    def _create_mixed_exercises_prompt(self, request: LessonRequest) -> str:
-        """Create prompt for exercises portion of mixed lesson"""
-        return f"""Create 2 coding exercises for: "{request.step_title}".
-
-Each exercise needs:
-- Title, instructions, starter_code, expected_output, hints[], solution
-
-Output as JSON array of exercises."""
-    
-    def _parse_mixed_text(self, ai_text: str) -> Dict:
-        """Parse text component of mixed lesson"""
-        try:
-            if '```json' in ai_text:
-                start = ai_text.find('```json') + 7
-                end = ai_text.find('```', start)
-                json_str = ai_text[start:end].strip()
-            else:
-                json_str = ai_text.strip()
-            
-            return json.loads(json_str)
-        except:
-            return {}
-    
-    def _parse_mixed_exercises(self, ai_text: str) -> List[Dict]:
-        """Parse exercises component of mixed lesson"""
-        try:
-            if '```json' in ai_text:
-                start = ai_text.find('```json') + 7
-                end = ai_text.find('```', start)
-                json_str = ai_text[start:end].strip()
-            else:
-                json_str = ai_text.strip()
-            
-            exercises = json.loads(json_str)
-            return exercises if isinstance(exercises, list) else []
-        except:
-            return []
-    
     # ========================================
-    # GEMINI API INTEGRATION
+    # HELPER METHODS
     # ========================================
-    
-    def _call_gemini_api(self, prompt: str, max_retries: int = 3) -> Optional[str]:
+
+    def _call_gemini_api(self, prompt: str) -> Optional[str]:
         """
-        Call Gemini API with prompt WITH RETRY LOGIC.
-        Returns generated text or None on error.
-        
-        Implements exponential backoff for network timeouts:
-        - Attempt 1: 30s timeout
-        - Attempt 2: 45s timeout (after 2s wait)
-        - Attempt 3: 60s timeout (after 4s wait)
+        Synchronous wrapper for calling Gemini API.
+        Used by methods that haven't been converted to async yet.
         """
-        if not self.gemini_api_key:
-            logger.error("❌ Gemini API key not configured")
+        import asyncio
+        try:
+            # Run async method in sync context
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If loop is already running, create a new task
+                future = asyncio.ensure_future(self._generate_with_ai(prompt, json_mode=False))
+                return future.result() if hasattr(future, 'result') else None
+            else:
+                # Otherwise run normally
+                return loop.run_until_complete(self._generate_with_ai(prompt, json_mode=False))
+        except Exception as e:
+            logger.error(f"❌ Gemini API call failed: {e}")
             return None
-        
-        base_timeout = 30
-        retry_delays = [2, 4]  # Seconds to wait between retries
-        
-        for attempt in range(max_retries):
-            try:
-                timeout = base_timeout + (attempt * 15)  # 30s, 45s, 60s
-                
-                headers = {'Content-Type': 'application/json'}
-                
-                payload = {
-                    "contents": [{
-                        "parts": [{"text": prompt}]
-                    }],
-                    "generationConfig": {
-                        "temperature": 0.3,  # Lower for more consistent output
-                        "topK": 20,
-                        "topP": 0.8,
-                        "maxOutputTokens": 8192,  # Max output length
-                        "candidateCount": 1,
-                    }
-                }
-                
-                logger.debug(f"📤 Calling Gemini API (attempt {attempt + 1}/{max_retries}, timeout={timeout}s, prompt={len(prompt)} chars)")
-                
-                response = requests.post(
-                    f"{self.gemini_api_url}?key={self.gemini_api_key}",
-                    headers=headers,
-                    json=payload,
-                    timeout=timeout  # Dynamic timeout
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    generated_text = result['candidates'][0]['content']['parts'][0]['text']
-                    
-                    logger.debug(f"✅ Gemini API success (response length: {len(generated_text)} chars)")
-                    
-                    return generated_text
-                else:
-                    logger.error(f"❌ Gemini API error {response.status_code}: {response.text}")
-                    # Don't retry on 400-level errors (bad request, auth, etc.)
-                    if 400 <= response.status_code < 500:
-                        return None
-                    # Retry on 500-level errors (server issues)
-                    raise Exception(f"Server error: {response.status_code}")
-            
-            except requests.exceptions.Timeout as e:
-                if attempt < max_retries - 1:
-                    wait_time = retry_delays[attempt]
-                    logger.warning(f"⏱️ Timeout on attempt {attempt + 1}, retrying in {wait_time}s...")
-                    import time
-                    time.sleep(wait_time)
-                else:
-                    logger.error(f"❌ Gemini API timeout after {max_retries} attempts: {e}")
-                    return None
-            
-            except requests.exceptions.RequestException as e:
-                if attempt < max_retries - 1:
-                    wait_time = retry_delays[attempt]
-                    logger.warning(f"⚠️ Network error on attempt {attempt + 1}, retrying in {wait_time}s...")
-                    import time
-                    time.sleep(wait_time)
-                else:
-                    logger.error(f"❌ Gemini API call failed after {max_retries} attempts: {e}")
-                    return None
-            
-            except Exception as e:
-                logger.error(f"❌ Gemini API unexpected error: {e}")
-                return None
-        
-        return None  # All retries exhausted
-    
-    # ========================================
-    # JSON REPAIR UTILITIES
-    # ========================================
-    
-    def _repair_json(self, json_str: str, error_msg: str) -> str:
-        """
-        Attempt to auto-repair common JSON errors from AI models.
-        
-        Common issues:
-        1. Unterminated strings (missing closing quote)
-        2. Trailing commas
-        3. Unescaped quotes in strings
-        4. Missing closing brackets
-        """
-        import re
-        
-        logger.debug(f"🔧 Attempting JSON repair for error: {error_msg}")
-        
-        repaired = json_str
-        
-        # Fix 1: Unterminated string at end (most common)
-        if "Unterminated string" in error_msg or "line 1, column 0" in error_msg:
-            # Add closing quote to last string if missing
-            if repaired.rstrip().endswith(',') or repaired.rstrip().endswith('{'):
-                repaired = repaired.rstrip() + '"'
-            elif not repaired.rstrip().endswith('"') and not repaired.rstrip().endswith('}'):
-                repaired = repaired.rstrip() + '"'
-        
-        # Fix 2: Trailing commas before closing brackets
-        repaired = re.sub(r',\s*}', '}', repaired)
-        repaired = re.sub(r',\s*]', ']', repaired)
-        
-        # Fix 3: Missing closing brackets (try to balance)
-        open_braces = repaired.count('{')
-        close_braces = repaired.count('}')
-        if open_braces > close_braces:
-            repaired += '}' * (open_braces - close_braces)
-        
-        open_brackets = repaired.count('[')
-        close_brackets = repaired.count(']')
-        if open_brackets > close_brackets:
-            repaired += ']' * (open_brackets - close_brackets)
-        
-        # Fix 4: Unescaped newlines in strings (replace with \n)
-        # This is tricky - only do inside quoted strings
-        # repaired = re.sub(r'(?<=")([^"]*)\n([^"]*?)(?=")', r'\1\\n\2', repaired)
-        
-        logger.debug(f"🔧 Repair applied: {len(json_str)} → {len(repaired)} chars")
-        
-        return repaired
-    
-    # ========================================
-    # FALLBACK CONTENT
-    # ========================================
-    
+
     async def _generate_fallback_lesson(self, request: LessonRequest) -> Dict[str, Any]:
         """
-        Generate basic fallback lesson when AI fails.
-        Minimal structure to prevent complete failure.
+        Generate a basic fallback lesson when AI generation fails.
+        Returns minimal structure to prevent complete failure.
         """
-        logger.warning(f"⚠️ Using fallback lesson for: {request.step_title}")
-        
+        logger.warning(f"⚠️ Generating fallback lesson for: {request.step_title}")
+
         return {
-            'type': request.learning_style,  # REQUIRED: Match expected field name
+            'type': request.learning_style,
             'lesson_type': request.learning_style,
             'title': f"{request.step_title} - Lesson {request.lesson_number}",
-            'summary': f"This lesson covers {request.step_title}. Due to technical limitations, detailed content is not available.",
-            'content': f"# {request.step_title}\n\nThis is a placeholder lesson. Please try regenerating or contact support.",
-            'estimated_duration': 20,
-            'is_fallback': True,
-            'error_note': 'AI generation unavailable - using fallback content'
+            'summary': f"This is a placeholder lesson for {request.step_title}. The AI generation encountered an error. Please try regenerating this lesson.",
+            'content': f"# {request.step_title}\n\nThis lesson content is currently unavailable due to a generation error. Please try again later.",
+            'estimated_duration': 30,
+            'error': 'AI generation failed, fallback lesson provided'
         }
 
+    def _repair_json(self, json_str: str, error_msg: str) -> str:
+        """
+        Attempt to repair common JSON errors.
 
-# Global instance
-lesson_generation_service = LessonGenerationService()
+        Args:
+            json_str: Malformed JSON string
+            error_msg: Error message from json.loads()
+
+        Returns:
+            Repaired JSON string (best effort)
+        """
+        import re
+
+        # Remove any trailing commas before closing braces/brackets
+        json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
+
+        # Remove comments (// and /* */)
+        json_str = re.sub(r'//.*?$', '', json_str, flags=re.MULTILINE)
+        json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)
+
+        # Ensure the JSON starts with { or [
+        json_str = json_str.strip()
+        if not json_str.startswith(('{', '[')):
+            # Try to find the first { or [
+            match = re.search(r'[{\[]', json_str)
+            if match:
+                json_str = json_str[match.start():]
+
+        # Ensure the JSON ends with } or ]
+        if not json_str.endswith(('}', ']')):
+            # Try to find the last } or ]
+            matches = list(re.finditer(r'[}\]]', json_str))
+            if matches:
+                json_str = json_str[:matches[-1].end()]
+
+        return json_str
+
+    def _create_mixed_text_prompt(self, request: LessonRequest) -> str:
+        """Create prompt for text component of mixed lesson"""
+        return f"""Create a concise text introduction for: "{request.step_title}"
+
+REQUIREMENTS:
+- 400-600 words (shorter than full reading lesson)
+- Clear explanation of core concepts
+- 3-5 key takeaways
+- 3-5 quiz questions
+
+Output as JSON:
+{{
+    "summary": "2-3 sentence overview",
+    "introduction": "Main text content (400-600 words)",
+    "key_concepts": ["concept1", "concept2", "concept3"],
+    "quiz": [
+        {{
+            "question": "Test question",
+            "options": ["A", "B", "C", "D"],
+            "correct_answer": "B",
+            "explanation": "Why this is correct"
+        }}
+    ]
+}}
+
+Generate for: {request.step_title}"""
+
+    def _parse_mixed_text(self, response: str) -> Dict:
+        """Parse text component response"""
+        try:
+            if '```json' in response:
+                start = response.find('```json') + 7
+                end = response.find('```', start)
+                json_str = response[start:end].strip()
+            else:
+                json_str = response.strip()
+
+            return json.loads(json_str)
+        except Exception as e:
+            logger.error(f"❌ Failed to parse mixed text: {e}")
+            return {
+                'summary': '',
+                'introduction': '',
+                'key_concepts': [],
+                'quiz': []
+            }
+
+    def _create_mixed_exercises_prompt(self, request: LessonRequest) -> str:
+        """Create prompt for exercises component of mixed lesson"""
+        return f"""Create 2 practice exercises for: "{request.step_title}"
+
+REQUIREMENTS:
+- Focus on hands-on practice
+- Include starter code and solution
+- Progressive difficulty
+
+Output as JSON array:
+[
+    {{
+        "title": "Exercise title",
+        "instructions": "What to build",
+        "starter_code": "// Code template",
+        "solution": "// Complete solution",
+        "hints": ["Hint 1", "Hint 2"]
+    }}
+]
+
+Generate for: {request.step_title}"""
+
+    def _parse_mixed_exercises(self, response: str) -> List[Dict]:
+        """Parse exercises response"""
+        try:
+            if '```json' in response:
+                start = response.find('```json') + 7
+                end = response.find('```', start)
+                json_str = response[start:end].strip()
+            else:
+                json_str = response.strip()
+
+            exercises = json.loads(json_str)
+            return exercises if isinstance(exercises, list) else []
+        except Exception as e:
+            logger.error(f"❌ Failed to parse mixed exercises: {e}")
+            return []

@@ -68,9 +68,9 @@ class RoadmapQuery:
     @strawberry.field
     async def list_roadmaps(self, info, user_id: Optional[str] = None) -> List[RoadmapType]:
         if user_id:
-            roadmaps = await sync_to_async(list)(Roadmap.objects.filter(user_id=user_id).order_by('-generated_at'))
+            roadmaps = await sync_to_async(list)(Roadmap.objects.prefetch_related('modules').filter(user_id=user_id).order_by('-generated_at'))
         else:
-            roadmaps = await sync_to_async(list)(Roadmap.objects.all().order_by('-generated_at'))
+            roadmaps = await sync_to_async(list)(Roadmap.objects.prefetch_related('modules').all().order_by('-generated_at'))
         return roadmaps
 
     @strawberry.field

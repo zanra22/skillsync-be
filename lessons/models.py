@@ -81,6 +81,26 @@ class Module(models.Model):
     difficulty = models.CharField(max_length=30, choices=[('beginner', 'Beginner'), ('intermediate', 'Intermediate'), ('advanced', 'Advanced')], default='beginner')
     # Resources will be populated after lesson generation (real links)
     resources = models.JSONField(default=list, blank=True, help_text="Actual resource links used in lessons")
+    
+    # Azure Durable Functions integration fields
+    generation_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('not_started', 'Not Started'),
+            ('queued', 'Queued'),
+            ('in_progress', 'In Progress'),
+            ('completed', 'Completed'),
+            ('failed', 'Failed'),
+        ],
+        default='not_started',
+        db_index=True,
+        help_text="Status of lesson generation process"
+    )
+    generation_job_id = models.CharField(max_length=100, blank=True, null=True, help_text="Azure Durable Functions job ID")
+    generation_error = models.TextField(blank=True, null=True, help_text="Error message if generation failed")
+    generation_started_at = models.DateTimeField(null=True, blank=True, help_text="When generation job was started")
+    generation_completed_at = models.DateTimeField(null=True, blank=True, help_text="When generation job was completed")
+    idempotency_key = models.CharField(max_length=64, blank=True, null=True, db_index=True, help_text="Prevents duplicate job submissions")
 
 
     # Community voting & caching
@@ -209,8 +229,16 @@ class LessonContent(models.Model):
     )
     ai_model_version = models.CharField(
         max_length=50,
-        default='gemini-1.5-flash',
-        help_text="AI model version (e.g., 'gemini-1.5-flash', 'gpt-4', 'claude-3-opus', 'manual')"
+        default='gemini-2.0-flash-exp',
+        help_text="AI model version (e.g., 'gemini-2.0-flash-exp', 'gpt-4', 'claude-3-opus', 'manual')"
+    )
+
+    # Generation metadata stored in JSONB (PostgreSQL JSONB field)
+    # Replaces need for MongoDB by storing all generation metadata here
+    generation_metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Metadata about generation: prompt, system_prompt, model, temperature, generated_at, etc."
     )
     
     # ✨ NEW: Multi-Source Research Attribution (Phase 2)

@@ -373,7 +373,21 @@ class LessonsMutation:
                 )
             
             logger.info(f"✅ AI generation complete, saving new version...")
-            
+
+            # Build generation metadata (stored in JSONB - no MongoDB needed!)
+            generation_metadata = {
+                'prompt': 'Regenerate lesson with improved quality',
+                'model': 'gemini-2.0-flash-exp',
+                'learning_style': old_lesson.learning_style,
+                'difficulty': old_lesson.difficulty_level,
+                'temperature': 0.7,
+                'max_tokens': 2048,
+                'generated_at': timezone.now().isoformat(),
+                'ai_provider': 'gemini',
+                'generation_attempt': 1,
+                'regenerated_from': old_lesson.id
+            }
+
             # Save as new version (SAME cache_key!)
             new_lesson = await sync_to_async(LessonContent.objects.create)(
                 roadmap_step_title=old_lesson.roadmap_step_title,
@@ -390,7 +404,8 @@ class LessonsMutation:
                 generated_by=user if user.is_authenticated else None,
                 approval_status='pending',  # Needs community review
                 upvotes=0,  # Start fresh
-                downvotes=0
+                downvotes=0,
+                generation_metadata=generation_metadata  # ← Store all metadata in JSONB
             )
             
             logger.info(f"✅ New version created: Old {old_lesson.id} → New {new_lesson.id}")
@@ -528,6 +543,93 @@ class LessonsMutation:
                 review=None,
                 lesson=None
             )
+
+
+    @strawberry.mutation
+    async def generate_module_lessons(
+        self,
+        info,
+        module_id: str
+    ) -> ModuleType:
+        """
+        Generate lessons for a module on-demand (when user clicks module).
+
+        This is the RECOMMENDED approach for cost efficiency:
+        - Only generates lessons when user actually views the module
+        - Saves 60-80% on AI costs vs generating all lessons upfront
+        - Provides better UX (fast dashboard load, lessons load when needed)
+
+        Status flow:
+        - not_started → queued → in_progress → completed/failed
+
+        Args:
+            info: GraphQL context
+            module_id: Module ID to generate lessons for
+
+        Returns:
+            ModuleType with updated generation status
+
+        Example:
+            mutation {
+                lessons {
+                    generateModuleLessons(moduleId: "abc123") {
+                        id
+                        title
+                        generationStatus
+                        generationError
+                    }
+                }
+            }
+        """
+        user = info.context.request.user
+
+        if not user.is_authenticated:
+            raise Exception("Authentication required")
+
+        try:
+            # Get module with roadmap relationship prefetched (avoid async ORM access)
+            module = await Module.objects.select_related('roadmap').filter(id=module_id).afirst()
+            if not module:
+                raise Exception(f"Module not found: {module_id}")
+
+            # Check if already generated/in-progress
+            if module.generation_status in ['completed', 'in_progress']:
+                logger.info(f"📦 Module {module_id} already {module.generation_status}, skipping")
+                return module
+
+            logger.info(f"🚀 On-demand generation requested for module: {module.title}")
+
+            # Get user profile for personalization
+            user_profile = None
+            try:
+                # Use sync_to_async to check profile in async context
+                has_profile = await sync_to_async(lambda: hasattr(user, 'profile'))()
+                if has_profile:
+                    user_profile = await sync_to_async(lambda: user.profile)()
+            except Exception as profile_error:
+                logger.debug(f"Could not load user profile: {profile_error}")
+                pass
+
+            # Import here to avoid circular dependency
+            from helpers.ai_roadmap_service import HybridRoadmapService
+
+            # Enqueue for generation via Azure Service Bus
+            roadmap_service = HybridRoadmapService()
+            try:
+                await roadmap_service.enqueue_module_for_generation(module, user_profile)
+                logger.info(f"✅ Module queued for generation: {module.title}")
+            finally:
+                # Cleanup async resources (critical on Windows)
+                await roadmap_service.cleanup()
+
+            # Refresh module to get updated status
+            await module.arefresh_from_db()
+
+            return module
+
+        except Exception as e:
+            logger.error(f"❌ Failed to generate module lessons: {e}", exc_info=True)
+            raise Exception(f"Failed to generate module lessons: {str(e)}")
 
 
 # Export for schema registration

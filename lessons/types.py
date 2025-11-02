@@ -4,18 +4,30 @@ from datetime import datetime
 # === Roadmap & Module Types ===
 @strawberry.type
 class ModuleType:
-    id: int
-    roadmap_id: int
+    id: str
+    roadmap_id: str
     title: str
     description: str
     order: int
     estimated_duration: str
     difficulty: str
     resources: strawberry.scalars.JSON
+    # Azure Functions integration fields
+    generation_status: str
+    generation_job_id: Optional[str]
+    generation_error: Optional[str]
+    generation_started_at: Optional[datetime]
+    generation_completed_at: Optional[datetime]
+    idempotency_key: Optional[str]
+    # Community voting
+    upvotes: int
+    downvotes: int
+    approval_status: str
+    created_at: datetime
 
 @strawberry.type
 class RoadmapType:
-    id: int
+    id: str
     title: str
     description: str
     user_id: str
@@ -27,7 +39,21 @@ class RoadmapType:
     ai_model_version: str
     status: str
     progress: strawberry.scalars.JSON
-    modules: List[ModuleType]
+    modules: Optional[List[ModuleType]] = None
+
+    @strawberry.field
+    async def modules(self) -> List[ModuleType]:
+        """Resolver for modules relationship"""
+        from asgiref.sync import sync_to_async
+        from .models import Module
+
+        # If modules already populated (from prefetch_related), return them
+        if hasattr(self, '_modules_cache'):
+            return self._modules_cache
+
+        # Otherwise fetch from database
+        modules = await sync_to_async(list)(Module.objects.filter(roadmap_id=self.id).order_by('order'))
+        return modules
 
 
 

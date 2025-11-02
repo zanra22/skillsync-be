@@ -5,9 +5,10 @@ from pathlib import Path
 
 from config.constants import SECRET_KEY, FRONTEND_URL, ENVIRONMENT, DATABASE_CONFIG, NINJA_JWT_CONFIG, ALLOWED_HOSTS_CONFIG, EMAIL_SETTINGS
 
-load_dotenv()
-
+# Load environment variables from .env file
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+env_path = BASE_DIR / '.env'
+load_dotenv(env_path)
 
 SECRET_KEY = SECRET_KEY
 

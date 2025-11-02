@@ -34,8 +34,7 @@ ALLOWED_HOSTS = {
 # Get the current allowed hosts for the environment
 ALLOWED_HOSTS_CONFIG = ALLOWED_HOSTS.get(ENVIRONMENT)
 print(f"Allowed Hosts: {ALLOWED_HOSTS_CONFIG}")
-print(f"Environment: {ENVIRONMENT}"
-      f"\nSecret Key: {SECRET_KEY}")
+print(f"Environment: {ENVIRONMENT}\nSecret Key: {SECRET_KEY}")
 
 FRONTEND_URL = {
     "development": os.getenv("DEV_FRONTEND_URL", "http://localhost:3000"),

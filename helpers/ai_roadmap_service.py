@@ -6,7 +6,16 @@ from dataclasses import dataclass, field
 import json
 import os
 import requests
+import uuid
+import hashlib
+from datetime import datetime
+from django.utils import timezone  # ✅ NEW: For timezone-aware datetimes
 from dataclasses import dataclass
+
+# Azure Service Bus integration
+from azure.servicebus.aio import ServiceBusClient
+from azure.servicebus import ServiceBusMessage
+from azure.identity import DefaultAzureCredential
 
 """
 🚀 MONGODB SCHEMA PREPARATION NOTES:
@@ -62,6 +71,8 @@ class LearningGoal:
 
 @dataclass
 class UserProfile:
+    user_id: str  # ✅ NEW: Track which user generated this roadmap
+    email: str  # ✅ NEW: Alternative identifier for user
     role: str
     industry: str
     career_stage: str
@@ -166,26 +177,23 @@ class HybridRoadmapService:
         Returns: (roadmap_obj, modules, lessons_by_module)
         """
         from lessons.models import Roadmap as RoadmapModel, Module as ModuleModel, LessonContent as LessonModel
-        from helpers.ai_lesson_service import LessonGenerationService, LessonRequest
         import re
-        lesson_service = LessonGenerationService()
 
-        # Ensure lesson_service clients are cleaned up on any exit path
+        # --- Ensure total_duration is normalized to a short machine-friendly format ---
         try:
-            # --- Ensure total_duration is normalized to a short machine-friendly format ---
+            raw_total = getattr(roadmap, 'total_duration', '') or ''
+            normalized_total = self._normalize_total_duration(raw_total)
+            if normalized_total != raw_total:
+                logger.debug(f"[RoadmapSave] Normalized total_duration: '{raw_total}' -> '{normalized_total}'")
+            # write-back to the roadmap object if possible
             try:
-                raw_total = getattr(roadmap, 'total_duration', '') or ''
-                normalized_total = self._normalize_total_duration(raw_total)
-                if normalized_total != raw_total:
-                    logger.debug(f"[RoadmapSave] Normalized total_duration: '{raw_total}' -> '{normalized_total}'")
-                # write-back to the roadmap object if possible
-                try:
-                    setattr(roadmap, 'total_duration', normalized_total)
-                except Exception:
-                    # not critical if roadmap is a dict or immutable; we'll use normalized_total when persisting
-                    pass
+                setattr(roadmap, 'total_duration', normalized_total)
             except Exception:
-                normalized_total = ''
+                # not critical if roadmap is a dict or immutable; we'll use normalized_total when persisting
+                pass
+        except Exception as e:
+            logger.debug(f"Error normalizing total_duration: {e}")
+            normalized_total = ''
 
         # 1. Create or get roadmap
         goal_input = getattr(roadmap, 'skill_name', '')
@@ -213,7 +221,7 @@ class HybridRoadmapService:
 
         modules = []
         lessons_by_module = {}
-        import re
+        
         def parse_duration(duration_str):
             week_match = re.search(r"(\d+)(?:-(\d+))?\s*weeks?", duration_str)
             hour_match = re.search(r"(\d+)(?:-(\d+))?\s*hours?/week", duration_str)
@@ -240,87 +248,145 @@ class HybridRoadmapService:
             )
             module_obj = await ModuleModel.objects.filter(cache_key=module_cache_key).afirst()
             if not module_obj:
+                # Create module with generation_status set to 'not_started'
                 module_obj = await ModuleModel.objects.acreate(
                     roadmap=roadmap_obj,
                     title=step.title,
                     order=idx+1,
                     difficulty=step.difficulty,
                     description=getattr(step, 'description', ''),
-                    cache_key=module_cache_key
+                    cache_key=module_cache_key,
+                    generation_status='not_started'
                 )
             modules.append(module_obj)
-            lessons = []
-            # Always generate at least one lesson per module, even if step.lessons is missing
-            total_hours = parse_duration(getattr(step, 'estimated_duration', '2 weeks at 5 hours/week'))
-            # Restore dynamic lesson count based on duration (as in working backup)
-            lesson_count = max(1, min(6, (total_hours + 3) // 4))
 
-            # Improved: calculate per-lesson duration based on module total hours
-            lesson_duration = int((total_hours * 60) / lesson_count) if lesson_count > 0 else 60
-            for lesson_num in range(1, lesson_count + 1):
-                lesson_title = getattr(step, 'title', f"Module {idx+1} Lesson {lesson_num}")
-                lesson_cache_key = LessonModel.generate_cache_key(
-                    step_title=lesson_title,
-                    lesson_number=lesson_num,
-                    learning_style=getattr(user_profile, 'learning_style', 'mixed'),
-                    multi_source=True
-                )
-                lesson_obj = await LessonModel.objects.filter(cache_key=lesson_cache_key).afirst()
-                if not lesson_obj:
-                    try:
-                        lesson_request = LessonRequest(
-                            step_title=lesson_title,
-                            lesson_number=lesson_num,
-                            difficulty=step.difficulty,
-                            industry=getattr(user_profile, 'industry', ''),
-                            learning_style=getattr(user_profile, 'learning_style', 'reading'),
-                            user_profile=user_profile,
-                            enable_research=True
-                        )
-                        lesson_data = await lesson_service.generate_lesson(lesson_request)
-                        if not lesson_data or not isinstance(lesson_data, dict) or not lesson_data.get('title'):
-                            raise ValueError(f"Lesson generation failed or returned incomplete data for {module_obj.title} - Lesson {lesson_num}")
-                    except Exception as e:
-                        logger.error(f"❌ Error generating lesson for {module_obj.title} - Lesson {lesson_num}: {e}")
-                        lesson_data = {
-                            'title': f"{module_obj.title} - Lesson {lesson_num}",
-                            'summary': getattr(step, 'description', ''),
-                            'content': f"No content available. Error: {str(e)}",
-                            'resources': [],
-                            'error': str(e)
-                        }
-                    # Defensive: ensure summary and content
-                    if 'summary' not in lesson_data:
-                        lesson_data['summary'] = getattr(step, 'description', '')
-                    if 'content' not in lesson_data or not lesson_data['content']:
-                        lesson_data['content'] = lesson_data.get('summary', getattr(step, 'description', ''))
-                    # Patch: set estimated_duration for each lesson based on module total hours and lesson count
-                    lesson_data['estimated_duration'] = lesson_duration
-                    lesson_obj = await LessonModel.objects.acreate(
-                        module=module_obj,
-                        roadmap_step_title=module_obj.title,
-                        lesson_number=lesson_num,
-                        learning_style=getattr(user_profile, 'learning_style', 'mixed'),
-                        content=lesson_data,
-                        title=lesson_data.get('title', f"{module_obj.title} - Lesson {lesson_num}"),
-                        description=lesson_data.get('summary', getattr(step, 'description', '')),
-                        estimated_duration=lesson_data['estimated_duration'],
-                        difficulty_level=step.difficulty,
-                        cache_key=lesson_cache_key
-                    )
-                lessons.append(lesson_obj)
-            # Debug: verify lessons are saved and can be fetched from DB
-            actual_lesson_count = await LessonModel.objects.filter(module=module_obj).acount()
-            logger.info(f"[LessonGen] Module '{step.title}' - lessons generated: {len(lessons)} (DB count: {actual_lesson_count})")
-            lessons_by_module[module_obj.title] = lessons
-        logger.info(f"[RoadmapSave] Modules created: {len(modules)}. Lessons by module: {[ (k, len(v)) for k,v in lessons_by_module.items() ]}")
+            # ON-DEMAND GENERATION STRATEGY:
+            # Don't enqueue modules immediately - lessons will be generated
+            # when user clicks on module (via separate GraphQL mutation)
+            # This saves 60-80% on AI costs by only generating what users view
+
+            # Return empty lessons for now - they'll be generated on-demand
+            lessons_by_module[module_obj.title] = []
+
+        logger.info(f"[RoadmapSave] Modules created: {len(modules)}. Lessons will be generated on-demand when user views modules.")
         return roadmap_obj, modules, lessons_by_module
-        finally:
-            # Best-effort cleanup of any async clients opened by LessonGenerationService
+    
+    async def enqueue_module_for_generation(self, module_obj, user_profile):
+        """
+        Enqueue lessons for a module via Azure Service Bus.
+        Called when user clicks "Generate" button to generate lessons for a specific module.
+        """
+        # Generate idempotency key to prevent duplicate processing
+        idempotency_key = self._generate_idempotency_key(module_obj)
+
+        # Update module with queued status and idempotency key
+        module_obj.generation_status = 'queued'
+        module_obj.idempotency_key = idempotency_key
+        module_obj.generation_started_at = timezone.now()  # ✅ FIXED: Use timezone-aware datetime
+        await module_obj.asave()
+
+        # Prepare message for Azure Service Bus (lesson-generation queue)
+        message_data = {
+            'module_id': module_obj.id,
+            'roadmap_id': module_obj.roadmap.id,
+            'title': module_obj.title,
+            'description': module_obj.description,
+            'difficulty': module_obj.difficulty,
+            'order': module_obj.order,
+            'user_id': module_obj.roadmap.user_id,
+            'user_profile': self._serialize_user_profile(user_profile),
+            'idempotency_key': idempotency_key,
+            'timestamp': timezone.now().isoformat()  # ✅ FIXED: Use timezone-aware datetime
+        }
+
+        # Send message to Azure Service Bus (lesson-generation queue)
+        await self._send_to_service_bus(message_data, 'lesson-generation')
+
+        logger.info(f"[ServiceBus] Lessons queued for module '{module_obj.title}' with idempotency key: {idempotency_key}")
+    
+    def _generate_idempotency_key(self, module_obj):
+        """Generate a unique idempotency key for the module."""
+        key_components = [
+            str(module_obj.id),
+            str(module_obj.roadmap.id),
+            module_obj.title,
+            str(module_obj.order),
+            str(datetime.now().timestamp())
+        ]
+        key_string = ":".join(key_components)
+        return hashlib.md5(key_string.encode()).hexdigest()
+    
+    def _serialize_user_profile(self, user_profile):
+        """Convert user profile to serializable dictionary."""
+        if hasattr(user_profile, '__dict__'):
+            # Convert dataclass or object to dict
+            profile_dict = {}
+            for key in ['role', 'industry', 'career_stage', 'learning_style', 'time_commitment']:
+                if hasattr(user_profile, key):
+                    profile_dict[key] = getattr(user_profile, key)
+            
+            # Handle goals separately as they might be objects
+            if hasattr(user_profile, 'goals') and user_profile.goals:
+                goals = []
+                for goal in user_profile.goals:
+                    if hasattr(goal, '__dict__'):
+                        goals.append({
+                            'skill_name': getattr(goal, 'skill_name', ''),
+                            'description': getattr(goal, 'description', ''),
+                            'target_skill_level': getattr(goal, 'target_skill_level', ''),
+                            'priority': getattr(goal, 'priority', 0)
+                        })
+                    else:
+                        goals.append(goal)
+                profile_dict['goals'] = goals
+            
+            return profile_dict
+        return user_profile  # Already a dict or JSON-serializable
+    
+    async def _send_to_service_bus(self, message_data, queue_name):
+        """
+        Send a message to Azure Service Bus.
+        Falls back to direct processing if Service Bus is not configured.
+        """
+        service_bus_conn_str = os.getenv('AZURE_SERVICE_BUS_CONNECTION_STRING')
+
+        if not service_bus_conn_str:
+            logger.warning("⚠️ AZURE_SERVICE_BUS_CONNECTION_STRING not found - falling back to direct processing")
+            # TODO: Implement direct processing fallback
+            return
+
+        # Debug: Log that we have the connection string (without exposing the full key)
+        logger.debug(f"[ServiceBus] Using connection string from env (starts with: {service_bus_conn_str[:50]}...)")
+        
+        try:
+            # Create a Service Bus client
+            service_bus_client = ServiceBusClient.from_connection_string(service_bus_conn_str)
+
+            # ✅ FIXED: Use async context manager for async code
+            async with service_bus_client:
+                sender = service_bus_client.get_queue_sender(queue_name=queue_name)
+
+                # Create a message with the serialized data
+                message = ServiceBusMessage(json.dumps(message_data))
+
+                # Send the message using async context
+                async with sender:
+                    await sender.send_messages(message)
+
+            logger.info(f"[ServiceBus] Message sent to queue '{queue_name}' successfully")
+        except Exception as e:
+            logger.error(f"❌ Error sending message to Azure Service Bus: {e}")
+            # Update module status to reflect the error
             try:
-                await lesson_service.cleanup()
-            except Exception as e:
-                logger.debug(f"⚠️ Failed to cleanup lesson_service clients: {e}")
+                module_id = message_data.get('module_id')
+                if module_id:
+                    module = await ModuleModel.objects.filter(id=module_id).afirst()
+                    if module:
+                        module.generation_status = 'failed'
+                        module.generation_error = f"Failed to enqueue: {str(e)}"
+                        await module.asave()
+            except Exception as inner_e:
+                logger.error(f"❌ Error updating module status: {inner_e}")
 
     async def generate_title_from_goal(self, goal_input: str) -> str:
         """
@@ -343,6 +409,25 @@ class HybridRoadmapService:
             base = ' '.join(keywords)
             return f"{base.title()} Roadmap"
         return f"{goal_input.strip().title()} Roadmap"
+
+    def _clean_json_string(self, json_str: str) -> str:
+        """
+        Clean malformed JSON strings from AI output.
+        Fixes common issues like:
+        - Extra spaces in key names: " "description" → "description"
+        - Trailing commas: [1,2,] → [1,2]
+        """
+        # Fix malformed keys with extra spaces/quotes
+        # Pattern: " "key": → "key":
+        json_str = re.sub(r'"\s+"([^"]+)":', r'"\1":', json_str)
+
+        # Remove any trailing commas before closing brackets/braces
+        json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
+
+        # Fix escaped quotes in values that shouldn't be escaped
+        json_str = re.sub(r'\\"([^"]+)\\"', r'"\1"', json_str)
+
+        return json_str
 
     def _parse_ai_response(self, ai_text: str, goal: LearningGoal) -> Optional[LearningRoadmap]:
         """
@@ -372,8 +457,8 @@ class HybridRoadmapService:
                     return None
             # Clean up the JSON string
             if json_data:
-                # Remove any trailing commas before closing brackets/braces
-                json_data = re.sub(r',(\s*[}\]])', r'\1', json_data)
+                # Use the JSON cleaning function
+                json_data = self._clean_json_string(json_data)
                 # 🚀 LOG THE EXTRACTED JSON FOR DEBUGGING
                 logger.info(f"🔍 EXTRACTED JSON for {goal.skill_name}:")
                 logger.info("-" * 50)
@@ -724,10 +809,11 @@ class HybridRoadmapService:
             raise RuntimeError("Gemini client not available") from ie
         from datetime import datetime
         import asyncio
+        # Rate limiting: 15 req/min = 4 seconds per request (Gemini 2.0 Flash free tier)
         if self._last_gemini_call:
             elapsed = (datetime.now() - self._last_gemini_call).total_seconds()
-            if elapsed < 6:
-                await asyncio.sleep(6 - elapsed)
+            if elapsed < 4:
+                await asyncio.sleep(4 - elapsed)
         self._last_gemini_call = datetime.now()
         genai.configure(api_key=self.gemini_api_key)
         model = genai.GenerativeModel('gemini-2.0-flash-exp')

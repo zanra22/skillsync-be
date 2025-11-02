@@ -260,6 +260,8 @@ class OnboardingMutation:
                         ))
 
                     user_profile = AIUserProfile(
+                        user_id=str(user.id),  # ✅ Track which user owns this roadmap
+                        email=user.email,  # ✅ Alternative identifier
                         role=user.role or 'learner',
                         industry=input.industry or 'Technology',
                         career_stage=input.career_stage or 'entry_level',
