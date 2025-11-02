@@ -164,8 +164,20 @@ CORS_ALLOWED_HEADERS = [
 CORS_ALLOW_METHODS = [
     'GET',
     'POST',
+    'PUT',
+    'DELETE',
+    'PATCH',
     'OPTIONS',
 ]
+
+# Expose additional headers
+CORS_EXPOSE_HEADERS = [
+    'content-type',
+    'x-csrftoken',
+]
+
+# Cache preflight requests for 1 hour
+CORS_PREFLIGHT_MAX_AGE = 3600
 
 # Enhanced Security Settings
 SECURE_BROWSER_XSS_FILTER = True
