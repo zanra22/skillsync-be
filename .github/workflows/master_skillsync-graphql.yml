@@ -42,8 +42,7 @@ jobs:
           PROD_DB_PASSWORD: ${{ secrets.PROD_DB_PASSWORD }}
           PROD_DB_PORT: ${{ secrets.PROD_DB_PORT }}
           DJANGO_DEBUG: False
-          STATIC_ROOT: /tmp/staticfiles
-          STATIC_URL: /static/
+          DISABLE_COLLECTSTATIC: 1
       
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
