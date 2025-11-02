@@ -42,6 +42,42 @@ FRONTEND_URL = {
     "production": os.getenv("PROD_FRONTEND_URL"),
 }.get(ENVIRONMENT, os.getenv("DEV_FRONTEND_URL", "http://localhost:3000"))
 
+# CORS Configuration - allow frontend origins
+CORS_ALLOWED_ORIGINS = {
+    "development": [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    "production": [
+        "https://www.skillsync.studio",
+        "https://skillsync.studio",
+        "http://localhost:3000",  # Allow localhost for testing against prod backend
+        "http://127.0.0.1:3000",
+    ],
+}
+
+# Get current CORS config
+CORS_ALLOWED_ORIGINS_CONFIG = CORS_ALLOWED_ORIGINS.get(ENVIRONMENT)
+print(f"CORS Allowed Origins: {CORS_ALLOWED_ORIGINS_CONFIG}")
+
+# CSRF Trusted Origins - must include HTTPS variants
+CSRF_TRUSTED_ORIGINS = {
+    "development": [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+    ],
+    "production": [
+        'https://www.skillsync.studio',
+        'https://skillsync.studio',
+        'http://localhost:3000',  # Allow localhost for testing
+        'http://127.0.0.1:3000',
+    ],
+}
+
+# Get current CSRF config
+CSRF_TRUSTED_ORIGINS_CONFIG = CSRF_TRUSTED_ORIGINS.get(ENVIRONMENT)
+print(f"CSRF Trusted Origins: {CSRF_TRUSTED_ORIGINS_CONFIG}")
+
 DATABASES = {
     "development": {
         "ENGINE": os.getenv("DEV_DB_ENGINE", "django.db.backends.postgresql"),

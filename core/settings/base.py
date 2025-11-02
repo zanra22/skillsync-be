@@ -3,7 +3,7 @@ import ssl
 from dotenv import load_dotenv
 from pathlib import Path
 
-from config.constants import SECRET_KEY, FRONTEND_URL, ENVIRONMENT, DATABASE_CONFIG, NINJA_JWT_CONFIG, ALLOWED_HOSTS_CONFIG, EMAIL_SETTINGS
+from config.constants import SECRET_KEY, FRONTEND_URL, ENVIRONMENT, DATABASE_CONFIG, NINJA_JWT_CONFIG, ALLOWED_HOSTS_CONFIG, EMAIL_SETTINGS, CORS_ALLOWED_ORIGINS_CONFIG, CSRF_TRUSTED_ORIGINS_CONFIG
 
 # Load environment variables from .env file
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -144,10 +144,7 @@ RESEND_API_KEY = EMAIL_SETTINGS["RESEND_API_KEY"]
 
 # CORS Configuration for frontend integration - ENHANCED SECURITY
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",  # Next.js development server
-    "http://127.0.0.1:3000",
-]
+CORS_ALLOWED_ORIGINS = CORS_ALLOWED_ORIGINS_CONFIG
 
 # STRICT: Only allow in development
 CORS_ALLOW_ALL_ORIGINS = False  # Never allow all origins
@@ -186,10 +183,7 @@ SESSION_COOKIE_AGE = 3600  # 1 hour
 CSRF_COOKIE_SECURE = ENVIRONMENT != 'development'
 CSRF_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SAMESITE = 'Strict'
-CSRF_TRUSTED_ORIGINS = [
-    'http://localhost:3000',
-    'http://127.0.0.1:3000',
-]
+CSRF_TRUSTED_ORIGINS = CSRF_TRUSTED_ORIGINS_CONFIG
 
 # Cache for rate limiting
 CACHES = {
