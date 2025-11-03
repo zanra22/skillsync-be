@@ -1,4 +1,5 @@
 # core/settings/prod.py
+# Deployment: Retry after Azure 409 conflict
 from .base import *
 from config.constants import DATABASE_CONFIG, FRONTEND_URL, CORS_ALLOWED_ORIGINS_CONFIG
 import os
