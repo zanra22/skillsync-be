@@ -33,7 +33,41 @@ ALLOW_DEV_CORS = os.getenv("ALLOW_DEV_CORS", "false").lower() == "true"
 
 ---
 
-### 2. ✅ Modified Fingerprint Validation Logic
+### 2. ✅ Modified Cookie Settings for Cross-Origin
+
+**File**: `auth/secure_utils.py`
+
+**Lines Modified** (around line 60-102):
+```python
+# ⚠️ TEMPORARY: Use SameSite='None' for cross-origin dev testing
+use_cross_origin_cookies = getattr(settings, 'ALLOW_DEV_CORS', False)
+
+# Changed from:
+# samesite='Lax' if settings.DEBUG else 'Strict'
+# To:
+samesite='None' if use_cross_origin_cookies else ('Lax' if settings.DEBUG else 'Strict')
+
+# Changed from:
+# secure=not settings.DEBUG
+# To:
+secure=True if use_cross_origin_cookies else (not settings.DEBUG)
+```
+
+**Action to Revert**:
+- [ ] **RESTORE** original cookie settings:
+```python
+# Remove use_cross_origin_cookies variable
+# Change back to:
+secure=not settings.DEBUG,
+samesite='Lax' if settings.DEBUG else 'Strict',
+domain='localhost' if settings.DEBUG else None,  # Restore domain setting
+```
+
+**Security Impact**: Using `SameSite='None'` allows cookies to be sent cross-origin, which reduces CSRF protection. This must be reverted for production!
+
+---
+
+### 3. ✅ Modified Fingerprint Validation Logic
 
 **File**: `auth/mutation.py`
 
@@ -64,7 +98,7 @@ elif not SecureTokenManager.validate_fingerprint(info.context.request):
 
 ---
 
-### 3. ✅ Azure Environment Variable
+### 4. ✅ Azure Environment Variable
 
 **Location**: Azure App Service → Configuration → Application Settings
 
@@ -141,6 +175,11 @@ Before production launch, complete ALL of these:
 
 - [ ] **Remove** `ALLOW_DEV_CORS` from `config/constants.py`
 - [ ] **Remove** `ALLOW_DEV_CORS` import and usage from `core/settings/base.py`
+- [ ] **Restore** cookie settings in `auth/secure_utils.py`:
+  - Remove `use_cross_origin_cookies` variable
+  - Change `samesite='None'` back to `'Lax' if settings.DEBUG else 'Strict'`
+  - Change `secure=True if use_cross_origin_cookies` back to `not settings.DEBUG`
+  - Restore `domain='localhost' if settings.DEBUG else None`
 - [ ] **Restore** simple fingerprint validation in `auth/mutation.py` (remove localhost bypass)
 - [ ] **Delete** `ALLOW_DEV_CORS` from Azure App Service configuration
 - [ ] **Restart** Azure App Service

@@ -57,16 +57,20 @@ class SecureTokenManager:
             max_age = None  # 🔑 KEY: None = session cookie
             print("🔐 Setting SESSION cookies (browser close = logout)")
         
+        # ⚠️ TEMPORARY: Use SameSite='None' for cross-origin dev testing
+        # When ALLOW_DEV_CORS=True, we need SameSite='None' + Secure=True for localhost→Azure
+        use_cross_origin_cookies = getattr(settings, 'ALLOW_DEV_CORS', False)
+
         # Set refresh token (HTTP-only, secure, with fingerprint)
         response.set_cookie(
             'refresh_token',
             refresh_token,
             max_age=max_age,  # 🔑 Dynamic based on remember_me
             httponly=True,  # Prevents XSS
-            secure=not settings.DEBUG,  # HTTPS only in production
-            samesite='Lax' if settings.DEBUG else 'Strict',  # Lax in dev for cross-origin (localhost/127.0.0.1)
+            secure=True if use_cross_origin_cookies else (not settings.DEBUG),  # Must be True for SameSite='None'
+            samesite='None' if use_cross_origin_cookies else ('Lax' if settings.DEBUG else 'Strict'),
             path='/',
-            domain='localhost' if settings.DEBUG else None,  # Share cookies between localhost:3000 and 127.0.0.1:8000
+            domain=None,  # Don't set domain for cross-origin cookies
         )
         
         # Set fingerprint cookie (HTTP-only for validation)
@@ -75,10 +79,10 @@ class SecureTokenManager:
             fingerprint,
             max_age=max_age,  # Match refresh token duration
             httponly=True,
-            secure=not settings.DEBUG,
-            samesite='Lax' if settings.DEBUG else 'Strict',
+            secure=True if use_cross_origin_cookies else (not settings.DEBUG),
+            samesite='None' if use_cross_origin_cookies else ('Lax' if settings.DEBUG else 'Strict'),
             path='/',
-            domain='localhost' if settings.DEBUG else None,
+            domain=None,
         )
         
         # ✅ SECURITY: ALL cookies are HTTP-only
@@ -91,20 +95,24 @@ class SecureTokenManager:
             fp_hash,
             max_age=max_age,  # Match refresh token duration
             httponly=True,
-            secure=not settings.DEBUG,
-            samesite='Lax' if settings.DEBUG else 'Strict',
+            secure=True if use_cross_origin_cookies else (not settings.DEBUG),
+            samesite='None' if use_cross_origin_cookies else ('Lax' if settings.DEBUG else 'Strict'),
             path='/',
-            domain='localhost' if settings.DEBUG else None,
+            domain=None,
         )
 
         # Debug logging
+        samesite_value = 'None' if use_cross_origin_cookies else ('Lax' if settings.DEBUG else 'Strict')
+        secure_value = True if use_cross_origin_cookies else (not settings.DEBUG)
+
         print(f"✅ Set authentication cookies:")
         print(f"   refresh_token: {refresh_token[:30]}...")
         print(f"   client_fp: {fingerprint[:20]}...")
         print(f"   fp_hash: {fp_hash[:20]}...")
         print(f"   Max age: {max_age} seconds" if max_age else "   Session cookie (browser close)")
-        print(f"   SameSite: {'Lax' if settings.DEBUG else 'Strict'}")
-        print(f"   Secure: {not settings.DEBUG}")
+        print(f"   SameSite: {samesite_value} {'(⚠️ CROSS-ORIGIN MODE)' if use_cross_origin_cookies else ''}")
+        print(f"   Secure: {secure_value}")
+        print(f"   ALLOW_DEV_CORS: {use_cross_origin_cookies}")
 
         return response
     
