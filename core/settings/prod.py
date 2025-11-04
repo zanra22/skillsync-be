@@ -18,13 +18,17 @@ DATABASES = {
 
 print(f"Production DATABASES: {DATABASES}")
 
-# CRITICAL FIX: Explicitly set CORS_ALLOWED_ORIGINS = None in production
+# CRITICAL FIX: Remove CORS_ALLOWED_ORIGINS in production
 # This ensures django-cors-headers respects CORS_ALLOW_ALL_ORIGINS = True
-# When CORS_ALLOWED_ORIGINS has any value (including the list from base.py),
+# When CORS_ALLOWED_ORIGINS is defined (even as a list from base.py),
 # django-cors-headers uses that whitelist and ignores CORS_ALLOW_ALL_ORIGINS
-# By setting it to None, we force django-cors-headers to check CORS_ALLOW_ALL_ORIGINS
+# By deleting CORS_ALLOWED_ORIGINS, we force django-cors-headers to use allow_all
 if CORS_ALLOW_ALL_ORIGINS:
-    CORS_ALLOWED_ORIGINS = None
-    print("Production: CORS_ALLOWED_ORIGINS set to None to enable CORS_ALLOW_ALL_ORIGINS")
+    if 'CORS_ALLOWED_ORIGINS' in locals():
+        del CORS_ALLOWED_ORIGINS
+    print("Production: CORS_ALLOWED_ORIGINS removed to enable CORS_ALLOW_ALL_ORIGINS = True")
 print(f"Production CORS_ALLOW_ALL_ORIGINS: {CORS_ALLOW_ALL_ORIGINS}")
-print(f"Production CORS_ALLOWED_ORIGINS: {CORS_ALLOWED_ORIGINS}")
+if 'CORS_ALLOWED_ORIGINS' in locals():
+    print(f"Production CORS_ALLOWED_ORIGINS: {CORS_ALLOWED_ORIGINS}")
+else:
+    print("Production: CORS_ALLOWED_ORIGINS not set (allowing all origins)")
