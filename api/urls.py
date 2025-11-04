@@ -1,8 +1,9 @@
 from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from .schema import schema
 from strawberry.django.views import AsyncGraphQLView
+from django.conf import settings
 
 
 class GraphQLViewWithOptionsSupport(AsyncGraphQLView):
@@ -36,7 +37,22 @@ class GraphQLViewWithOptionsSupport(AsyncGraphQLView):
 graphql_view = csrf_exempt(GraphQLViewWithOptionsSupport.as_view(schema=schema))
 
 
+def health_check(request):
+    """Simple health check endpoint to test CORS"""
+    return JsonResponse({
+        "status": "ok",
+        "cors_settings": {
+            "CORS_ALLOW_ALL_ORIGINS": getattr(settings, 'CORS_ALLOW_ALL_ORIGINS', False),
+            "CORS_ALLOW_CREDENTIALS": getattr(settings, 'CORS_ALLOW_CREDENTIALS', False),
+            "CORS_ALLOWED_ORIGINS": getattr(settings, 'CORS_ALLOWED_ORIGINS', []),
+            "ENVIRONMENT": getattr(settings, 'ENVIRONMENT', 'not set'),
+        }
+    })
+
+
 urlpatterns = [
     # GraphQL endpoint mounted at /graphql/ (see core.urls)
     path("", graphql_view, name="graphql"),
+    # Health check endpoint to test CORS
+    path("health/", health_check, name="health"),
 ]

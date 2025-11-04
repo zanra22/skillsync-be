@@ -11,11 +11,13 @@ env_path = BASE_DIR / '.env'
 load_dotenv(env_path)
 
 SECRET_KEY = SECRET_KEY
+ENVIRONMENT = ENVIRONMENT  # Make ENVIRONMENT available in settings
 
 ALLOWED_HOSTS = ALLOWED_HOSTS_CONFIG
 
 print(f"Current Environment: {ENVIRONMENT}")
 print(f"Using SECRET_KEY: {SECRET_KEY}")
+print(f"CORS_ALLOWED_ORIGINS_CONFIG: {CORS_ALLOWED_ORIGINS_CONFIG}")
 
 DEBUG = True
 
@@ -145,15 +147,18 @@ RESEND_API_KEY = EMAIL_SETTINGS["RESEND_API_KEY"]
 # CORS Configuration for frontend integration - ENHANCED SECURITY
 CORS_ALLOW_CREDENTIALS = True
 
-# TEMPORARY: Debug CORS issue by allowing all origins
-# TODO: Remove after debugging and use CORS_ALLOWED_ORIGINS_CONFIG
-CORS_ALLOW_ALL_ORIGINS = ENVIRONMENT == 'production'  # DEBUG: Allow all for production testing
+# Allow all origins if ENVIRONMENT is not set or is production (for debugging)
+# This handles cases where ENVIRONMENT variable might not be set in Azure
+CORS_ALLOW_ALL_ORIGINS = True  # Temporarily allow all to debug
 
-# CRITICAL: Only set CORS_ALLOWED_ORIGINS when NOT allowing all origins
-# django-cors-headers prioritizes CORS_ALLOWED_ORIGINS over CORS_ALLOW_ALL_ORIGINS
-# Setting both causes specific origins list to override allow_all setting
-if not CORS_ALLOW_ALL_ORIGINS:
-    CORS_ALLOWED_ORIGINS = CORS_ALLOWED_ORIGINS_CONFIG
+# Fallback: Set allowed origins even if allow_all is True
+# This ensures CORS works even if django-cors-headers behaves unexpectedly
+CORS_ALLOWED_ORIGINS = CORS_ALLOWED_ORIGINS_CONFIG or [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://www.skillsync.studio",
+    "https://skillsync.studio",
+]
 
 CORS_ALLOWED_HEADERS = [
     'accept',
