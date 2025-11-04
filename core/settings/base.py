@@ -144,11 +144,16 @@ RESEND_API_KEY = EMAIL_SETTINGS["RESEND_API_KEY"]
 
 # CORS Configuration for frontend integration - ENHANCED SECURITY
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOWED_ORIGINS = CORS_ALLOWED_ORIGINS_CONFIG
 
 # TEMPORARY: Debug CORS issue by allowing all origins
 # TODO: Remove after debugging and use CORS_ALLOWED_ORIGINS_CONFIG
 CORS_ALLOW_ALL_ORIGINS = ENVIRONMENT == 'production'  # DEBUG: Allow all for production testing
+
+# CRITICAL: Only set CORS_ALLOWED_ORIGINS when NOT allowing all origins
+# django-cors-headers prioritizes CORS_ALLOWED_ORIGINS over CORS_ALLOW_ALL_ORIGINS
+# Setting both causes specific origins list to override allow_all setting
+if not CORS_ALLOW_ALL_ORIGINS:
+    CORS_ALLOWED_ORIGINS = CORS_ALLOWED_ORIGINS_CONFIG
 
 CORS_ALLOWED_HEADERS = [
     'accept',
