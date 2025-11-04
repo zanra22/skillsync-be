@@ -18,17 +18,16 @@ DATABASES = {
 
 print(f"Production DATABASES: {DATABASES}")
 
-# CRITICAL FIX: Remove CORS_ALLOWED_ORIGINS in production
+# CRITICAL FIX: Remove CORS_ALLOWED_ORIGINS from globals in production
 # This ensures django-cors-headers respects CORS_ALLOW_ALL_ORIGINS = True
-# When CORS_ALLOWED_ORIGINS is defined (even as a list from base.py),
-# django-cors-headers uses that whitelist and ignores CORS_ALLOW_ALL_ORIGINS
-# By deleting CORS_ALLOWED_ORIGINS, we force django-cors-headers to use allow_all
+# CORS_ALLOWED_ORIGINS comes from 'from .base import *', so we must delete it from globals()
+# not locals() to actually remove it from the settings module namespace
 if CORS_ALLOW_ALL_ORIGINS:
-    if 'CORS_ALLOWED_ORIGINS' in locals():
-        del CORS_ALLOWED_ORIGINS
-    print("Production: CORS_ALLOWED_ORIGINS removed to enable CORS_ALLOW_ALL_ORIGINS = True")
+    if 'CORS_ALLOWED_ORIGINS' in globals():
+        del globals()['CORS_ALLOWED_ORIGINS']
+    print("Production: CORS_ALLOWED_ORIGINS removed from globals to enable CORS_ALLOW_ALL_ORIGINS = True")
 print(f"Production CORS_ALLOW_ALL_ORIGINS: {CORS_ALLOW_ALL_ORIGINS}")
-if 'CORS_ALLOWED_ORIGINS' in locals():
-    print(f"Production CORS_ALLOWED_ORIGINS: {CORS_ALLOWED_ORIGINS}")
+if 'CORS_ALLOWED_ORIGINS' in globals():
+    print(f"Production CORS_ALLOWED_ORIGINS: {globals()['CORS_ALLOWED_ORIGINS']}")
 else:
-    print("Production: CORS_ALLOWED_ORIGINS not set (allowing all origins)")
+    print("Production: CORS_ALLOWED_ORIGINS not in globals (allowing all origins)")
