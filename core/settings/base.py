@@ -146,8 +146,9 @@ RESEND_API_KEY = EMAIL_SETTINGS["RESEND_API_KEY"]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = CORS_ALLOWED_ORIGINS_CONFIG
 
-# STRICT: Only allow in development
-CORS_ALLOW_ALL_ORIGINS = False  # Never allow all origins
+# TEMPORARY: Debug CORS issue by allowing all origins
+# TODO: Remove after debugging and use CORS_ALLOWED_ORIGINS_CONFIG
+CORS_ALLOW_ALL_ORIGINS = ENVIRONMENT == 'production'  # DEBUG: Allow all for production testing
 
 CORS_ALLOWED_HEADERS = [
     'accept',
