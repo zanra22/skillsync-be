@@ -96,7 +96,16 @@ class SecureTokenManager:
             path='/',
             domain='localhost' if settings.DEBUG else None,
         )
-        
+
+        # Debug logging
+        print(f"✅ Set authentication cookies:")
+        print(f"   refresh_token: {refresh_token[:30]}...")
+        print(f"   client_fp: {fingerprint[:20]}...")
+        print(f"   fp_hash: {fp_hash[:20]}...")
+        print(f"   Max age: {max_age} seconds" if max_age else "   Session cookie (browser close)")
+        print(f"   SameSite: {'Lax' if settings.DEBUG else 'Strict'}")
+        print(f"   Secure: {not settings.DEBUG}")
+
         return response
     
     @staticmethod
@@ -105,7 +114,14 @@ class SecureTokenManager:
         stored_fp_hash = request.COOKIES.get('fp_hash')
         current_fp = SecureTokenManager.create_fingerprint(request)
         current_fp_hash = hashlib.sha256(current_fp.encode()).hexdigest()
-        
+
+        # Debug logging
+        print(f"🔍 Fingerprint Validation:")
+        print(f"   Stored hash: {stored_fp_hash[:20] if stored_fp_hash else 'None'}...")
+        print(f"   Current hash: {current_fp_hash[:20]}...")
+        print(f"   Match: {stored_fp_hash == current_fp_hash}")
+        print(f"   User-Agent: {request.META.get('HTTP_USER_AGENT', 'Not set')[:50]}...")
+
         return stored_fp_hash == current_fp_hash
     
     @staticmethod

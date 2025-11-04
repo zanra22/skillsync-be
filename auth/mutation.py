@@ -284,14 +284,35 @@ class AuthMutation:
             
             # Validate client fingerprint first (skip in development)
             from django.conf import settings
-            if settings.DEBUG:
-                print("🔧 Development mode: Skipping fingerprint validation for token refresh")
-            elif not SecureTokenManager.validate_fingerprint(info.context.request):
-                print("❌ Fingerprint validation FAILED")
-                return TokenRefreshPayload(
-                    success=False,
-                    message="Security validation failed - potential session hijacking detected"
-                )
+
+            # ⚠️ TEMPORARY: Check if dev CORS is enabled and request is from localhost
+            request_origin = info.context.request.META.get('HTTP_ORIGIN', '')
+            is_localhost_request = 'localhost' in request_origin or '127.0.0.1' in request_origin
+            skip_validation = settings.DEBUG or (settings.ALLOW_DEV_CORS and is_localhost_request)
+
+            if skip_validation:
+                print(f"🔧 Skipping fingerprint validation (DEBUG={settings.DEBUG}, ALLOW_DEV_CORS={settings.ALLOW_DEV_CORS}, origin={request_origin})")
+            else:
+                # Check if cookies exist first
+                fp_hash_cookie = info.context.request.COOKIES.get('fp_hash')
+                client_fp_cookie = info.context.request.COOKIES.get('client_fp')
+
+                if not fp_hash_cookie or not client_fp_cookie:
+                    print(f"⚠️ Missing fingerprint cookies (fp_hash={bool(fp_hash_cookie)}, client_fp={bool(client_fp_cookie)})")
+                    print(f"🍪 Available cookies: {list(info.context.request.COOKIES.keys())}")
+                    print(f"🌐 Request origin: {request_origin}")
+                    return TokenRefreshPayload(
+                        success=False,
+                        message="Authentication cookies missing - please login again"
+                    )
+
+                # Validate fingerprint
+                if not SecureTokenManager.validate_fingerprint(info.context.request):
+                    print("❌ Fingerprint validation FAILED - potential session hijacking")
+                    return TokenRefreshPayload(
+                        success=False,
+                        message="Security validation failed - potential session hijacking detected"
+                    )
             
             # Try to get refresh token from parameter first, then from cookies
             token_to_use = refresh_token

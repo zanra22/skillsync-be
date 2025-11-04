@@ -3,7 +3,7 @@ import ssl
 from dotenv import load_dotenv
 from pathlib import Path
 
-from config.constants import SECRET_KEY, FRONTEND_URL, ENVIRONMENT, DATABASE_CONFIG, NINJA_JWT_CONFIG, ALLOWED_HOSTS_CONFIG, EMAIL_SETTINGS, CORS_ALLOWED_ORIGINS_CONFIG, CSRF_TRUSTED_ORIGINS_CONFIG
+from config.constants import SECRET_KEY, FRONTEND_URL, ENVIRONMENT, DATABASE_CONFIG, NINJA_JWT_CONFIG, ALLOWED_HOSTS_CONFIG, EMAIL_SETTINGS, CORS_ALLOWED_ORIGINS_CONFIG, CSRF_TRUSTED_ORIGINS_CONFIG, ALLOW_DEV_CORS
 
 # Load environment variables from .env file
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -12,12 +12,14 @@ load_dotenv(env_path)
 
 SECRET_KEY = SECRET_KEY
 ENVIRONMENT = ENVIRONMENT  # Make ENVIRONMENT available in settings
+ALLOW_DEV_CORS = ALLOW_DEV_CORS  # ⚠️ TEMPORARY: For development testing
 
 ALLOWED_HOSTS = ALLOWED_HOSTS_CONFIG
 
 print(f"Current Environment: {ENVIRONMENT}")
 print(f"Using SECRET_KEY: {SECRET_KEY}")
 print(f"CORS_ALLOWED_ORIGINS_CONFIG: {CORS_ALLOWED_ORIGINS_CONFIG}")
+print(f"⚠️ ALLOW_DEV_CORS: {ALLOW_DEV_CORS}")
 
 DEBUG = True
 
