@@ -40,11 +40,11 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",  # Enable CORS - MUST be early
     "django.middleware.security.SecurityMiddleware",
     "auth.rate_limiting.SecurityHeadersMiddleware",  # Security headers
     "auth.rate_limiting.RateLimitMiddleware",  # Rate limiting
     "django.contrib.sessions.middleware.SessionMiddleware",
-    "corsheaders.middleware.CorsMiddleware",  # Enable CORS
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
