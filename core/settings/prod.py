@@ -18,7 +18,11 @@ DATABASES = {
 
 print(f"Production DATABASES: {DATABASES}")
 
-# Explicitly set CORS configuration for production
-if CORS_ALLOWED_ORIGINS_CONFIG:
-    CORS_ALLOWED_ORIGINS = CORS_ALLOWED_ORIGINS_CONFIG
+# IMPORTANT: Do NOT override base.py CORS settings
+# base.py already handles CORS_ALLOWED_ORIGINS conditionally based on CORS_ALLOW_ALL_ORIGINS
+# If we re-set CORS_ALLOWED_ORIGINS here, it will override the allow_all setting
+print(f"Production CORS_ALLOW_ALL_ORIGINS: {CORS_ALLOW_ALL_ORIGINS}")
+if hasattr(locals(), 'CORS_ALLOWED_ORIGINS'):
     print(f"Production CORS_ALLOWED_ORIGINS: {CORS_ALLOWED_ORIGINS}")
+else:
+    print("Production: CORS_ALLOWED_ORIGINS not set (CORS_ALLOW_ALL_ORIGINS is True)")
