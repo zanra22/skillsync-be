@@ -66,7 +66,7 @@ class SecureTokenManager:
             max_age=max_age,  # 🔑 Dynamic based on remember_me
             httponly=True,  # Prevents XSS
             secure=not settings.DEBUG,
-            samesite='Lax' if settings.DEBUG else 'Strict',
+            samesite='Lax',  # 🔑 CRITICAL: Must be Lax for cross-domain cookies (skillsync.studio ↔ skillsync-graphql.azurewebsites.net)
             path='/',
             domain='localhost' if settings.DEBUG else None,
         )
@@ -78,7 +78,7 @@ class SecureTokenManager:
             max_age=max_age,  # Match refresh token duration
             httponly=True,
             secure=not settings.DEBUG,
-            samesite='Lax' if settings.DEBUG else 'Strict',
+            samesite='Lax',  # 🔑 CRITICAL: Must be Lax for cross-domain cookies
             path='/',
             domain='localhost' if settings.DEBUG else None,
         )
@@ -94,13 +94,13 @@ class SecureTokenManager:
             max_age=max_age,  # Match refresh token duration
             httponly=True,
             secure=not settings.DEBUG,
-            samesite='Lax' if settings.DEBUG else 'Strict',
+            samesite='Lax',  # 🔑 CRITICAL: Must be Lax for cross-domain cookies
             path='/',
             domain='localhost' if settings.DEBUG else None,
         )
 
         # Debug logging
-        samesite_value = 'Lax' if settings.DEBUG else 'Strict'
+        samesite_value = 'Lax'  # Always Lax for cross-domain support
         secure_value = not settings.DEBUG
 
         print(f"✅ Set authentication cookies:")
