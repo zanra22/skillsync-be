@@ -2,25 +2,24 @@ from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse, JsonResponse
 from .schema import schema
-from strawberry.django.views import AsyncGraphQLView
+from .views import JWTGraphQLView
 from django.conf import settings
 
 
-class GraphQLViewWithOptionsSupport(AsyncGraphQLView):
+class GraphQLViewWithCookieSupport(JWTGraphQLView):
     """
-    AsyncGraphQLView subclass that handles OPTIONS requests for CORS preflight.
+    JWTGraphQLView subclass that handles OPTIONS requests for CORS preflight
+    AND properly manages HTTP-only cookies.
+
+    Extends JWTGraphQLView to:
+    1. Fix cookie context mismatch (cookies are now properly applied)
+    2. Handle CORS preflight OPTIONS requests
+    3. Ensure cookies are in the HTTP response headers
 
     Issue: Strawberry's AsyncGraphQLView doesn't implement options() method,
     causing OPTIONS preflight requests to fail with 405 Method Not Allowed.
-    This breaks CORS because the preflight request never completes.
 
-    Fix: Implement options() to return 200 OK. This allows:
-    - CorsMiddleware to add CORS headers to the response
-    - SecurityHeadersMiddleware to add security headers
-    - The browser to complete the CORS preflight sequence
-
-    Security: This doesn't bypass any security features. All middleware
-    (rate limiting, security headers, JWT auth) still processes the response.
+    Security: All cookies are HTTP-only and secure (XSS + CSRF protected).
     """
 
     def options(self):
@@ -33,8 +32,8 @@ class GraphQLViewWithOptionsSupport(AsyncGraphQLView):
         return response
 
 
-# Create the GraphQL view with CSRF exemption
-graphql_view = csrf_exempt(GraphQLViewWithOptionsSupport.as_view(schema=schema))
+# Create the GraphQL view with CSRF exemption and cookie support
+graphql_view = csrf_exempt(GraphQLViewWithCookieSupport.as_view(schema=schema))
 
 
 def health_check(request):
