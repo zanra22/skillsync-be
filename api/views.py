@@ -46,9 +46,9 @@ class JWTGraphQLView(AsyncGraphQLView):
         super().__init__(*args, **kwargs)
         self._cookie_response = None  # 🔑 CRITICAL: Store at instance level
 
-    def get_context(self, request, response=None):
+    async def get_context(self, request, response=None):
         """Override context to include response for cookie handling"""
-        context = super().get_context(request, response)
+        context = await super().get_context(request, response)
         # 🔑 CRITICAL: Use instance-level cookie_response, not a new one
         # This ensures mutations and dispatch use the SAME context
         if self._cookie_response is None:
