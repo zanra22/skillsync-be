@@ -136,6 +136,15 @@ DATABASES = {
     "default": DATABASE_CONFIG,
 }
 
+# 🔑 CRITICAL: Database Connection Pooling - Required for production performance
+# Without these settings, Django creates new connections for each request
+# which causes timeouts and hanging requests when PostgreSQL takes time to respond
+DATABASES['default']['CONN_MAX_AGE'] = 600  # Keep connections alive for 10 minutes
+DATABASES['default']['OPTIONS'] = {
+    'connect_timeout': 10,  # 10 second timeout for initial connection
+    'options': '-c statement_timeout=30000'  # 30 second statement timeout
+}
+
 # Django Ninja JWT Settings
 NINJA_JWT = NINJA_JWT_CONFIG
 
