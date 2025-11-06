@@ -14,9 +14,15 @@ class CookieResponse:
     def __init__(self):
         self.cookies = []
 
-    def set_cookie(self, key, value, max_age=None, expires=None, path='/',
+    def set_cookie(self, key, value='', max_age=None, expires=None, path='/',
                    domain=None, secure=False, httponly=False, samesite='Lax'):
         """Store cookie data to be applied later"""
+        # Ensure value is a string (some code may pass None or other types)
+        if value is None:
+            value = ''
+        else:
+            value = str(value)
+
         self.cookies.append({
             'key': key,
             'value': value,
@@ -29,7 +35,7 @@ class CookieResponse:
             'samesite': samesite
         })
 
-    def delete_cookie(self, key, path='/', domain=None):
+    def delete_cookie(self, key, path='/', domain=None, samesite='Lax'):
         """Store cookie deletion to be applied later"""
         self.cookies.append({
             'key': key,
@@ -40,7 +46,7 @@ class CookieResponse:
             'domain': domain,
             'secure': False,
             'httponly': False,
-            'samesite': 'Lax'
+            'samesite': samesite
         })
 
 class JWTGraphQLView(AsyncGraphQLView):

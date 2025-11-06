@@ -67,8 +67,11 @@ class SecureTokenManager:
             # Production: share cookies across domains (studio -> graphql)
             cookie_domain = '.skillsync.studio'  # Leading dot allows subdomains
         else:
-            # Development: localhost only
-            cookie_domain = 'localhost'
+            # Development: No domain = same-origin only
+            # Browser will use the current host (localhost:8000)
+            # NOTE: Cookies won't be sent cross-origin (localhost:3000 → localhost:8000)
+            # but WILL be sent back on subsequent requests to localhost:8000
+            cookie_domain = None
 
         response.set_cookie(
             'refresh_token',
@@ -76,7 +79,7 @@ class SecureTokenManager:
             max_age=max_age,  # 🔑 Dynamic based on remember_me
             httponly=True,  # Prevents XSS
             secure=not settings.DEBUG,
-            samesite='Lax',  # 🔑 CRITICAL: Must be Lax for cross-domain cookies
+            samesite='Lax',  # Works for same-site (localhost:3000 → localhost:8000)
             path='/',
             domain=cookie_domain,
         )
@@ -158,8 +161,8 @@ class SecureTokenManager:
             # Production: share cookies across domains
             domain = '.skillsync.studio'  # Leading dot allows subdomains
         else:
-            # Development: localhost only
-            domain = 'localhost'
+            # Development: No domain (same-origin)
+            domain = None
 
         for cookie_name in cookies_to_clear:
             print(f"  🗑️ Deleting cookie: {cookie_name} (domain={domain})")
