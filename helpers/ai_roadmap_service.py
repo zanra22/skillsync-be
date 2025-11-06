@@ -435,6 +435,10 @@ class HybridRoadmapService:
         """
         try:
             logger.info(f"🔍 Parsing AI response for {goal.skill_name}")
+            # Log the actual AI response for debugging
+            logger.info(f"📝 AI Response (first 500 chars): {ai_text[:500] if ai_text else 'EMPTY/NONE'}")
+            logger.info(f"📏 AI Response length: {len(ai_text) if ai_text else 0}")
+
             # Try multiple extraction methods for JSON
             json_data = None
             # Method 1: Look for JSON code block
@@ -453,7 +457,7 @@ class HybridRoadmapService:
                     logger.info("✅ Found raw JSON")
                 else:
                     logger.error("❌ No JSON structure found in AI response")
-                    logger.debug(f"AI Response preview: {ai_text[:200]}...")
+                    logger.error(f"📋 Full AI Response: {ai_text}")
                     return None
             # Clean up the JSON string
             if json_data:
@@ -673,8 +677,12 @@ class HybridRoadmapService:
                 try:
                     content = await self._generate_with_deepseek_v31(prompt)
                     self._model_usage['deepseek_v31'] += 1
-                    logger.info("✅ DeepSeek V3.1 roadmap success")
-                    return self._parse_ai_response(content, goal)
+                    logger.info("✅ DeepSeek V3.1 API call success")
+                    parsed_result = self._parse_ai_response(content, goal)
+                    if parsed_result is None:
+                        raise ValueError("DeepSeek returned invalid/unparseable response")
+                    logger.info("✅ DeepSeek V3.1 roadmap parsed successfully")
+                    return parsed_result
                 except Exception as e:
                     logger.warning(f"⚠️ DeepSeek V3.1 error: {e}, falling back to Groq")
             # Fallback to Groq
@@ -682,16 +690,24 @@ class HybridRoadmapService:
                 try:
                     content = await self._generate_with_groq(prompt)
                     self._model_usage['groq'] += 1
-                    logger.info("✅ Groq roadmap success")
-                    return self._parse_ai_response(content, goal)
+                    logger.info("✅ Groq API call success")
+                    parsed_result = self._parse_ai_response(content, goal)
+                    if parsed_result is None:
+                        raise ValueError("Groq returned invalid/unparseable response")
+                    logger.info("✅ Groq roadmap parsed successfully")
+                    return parsed_result
                 except Exception as e:
                     logger.warning(f"⚠️ Groq error: {e}, falling back to Gemini")
             # Final fallback to Gemini
             if self.gemini_api_key:
                 content = await self._generate_with_gemini(prompt)
                 self._model_usage['gemini'] += 1
-                logger.info("✅ Gemini roadmap success")
-                return self._parse_ai_response(content, goal)
+                logger.info("✅ Gemini API call success")
+                parsed_result = self._parse_ai_response(content, goal)
+                if parsed_result is None:
+                    raise ValueError("Gemini returned invalid/unparseable response")
+                logger.info("✅ Gemini roadmap parsed successfully")
+                return parsed_result
             logger.error("❌ No AI provider available for roadmap generation")
             return None
         except Exception as e:
