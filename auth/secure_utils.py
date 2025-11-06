@@ -60,15 +60,25 @@ class SecureTokenManager:
             print("🔐 Setting SESSION cookies (browser close = logout)")
         
         # Set refresh token (HTTP-only, secure, with fingerprint)
+        # 🔑 For cross-domain cookie sharing (skillsync.studio ↔ skillsync-graphql.azurewebsites.net)
+        # Use explicit domain in production to make cookies accessible across domains
+        cookie_domain = None
+        if not settings.DEBUG:
+            # Production: share cookies across domains (studio -> graphql)
+            cookie_domain = '.skillsync.studio'  # Leading dot allows subdomains
+        else:
+            # Development: localhost only
+            cookie_domain = 'localhost'
+
         response.set_cookie(
             'refresh_token',
             refresh_token,
             max_age=max_age,  # 🔑 Dynamic based on remember_me
             httponly=True,  # Prevents XSS
             secure=not settings.DEBUG,
-            samesite='Lax',  # 🔑 CRITICAL: Must be Lax for cross-domain cookies (skillsync.studio ↔ skillsync-graphql.azurewebsites.net)
+            samesite='Lax',  # 🔑 CRITICAL: Must be Lax for cross-domain cookies
             path='/',
-            domain='localhost' if settings.DEBUG else None,
+            domain=cookie_domain,
         )
 
         # Set fingerprint cookie (HTTP-only for validation)
@@ -80,7 +90,7 @@ class SecureTokenManager:
             secure=not settings.DEBUG,
             samesite='Lax',  # 🔑 CRITICAL: Must be Lax for cross-domain cookies
             path='/',
-            domain='localhost' if settings.DEBUG else None,
+            domain=cookie_domain,
         )
 
         # ✅ SECURITY: ALL cookies are HTTP-only
@@ -96,7 +106,7 @@ class SecureTokenManager:
             secure=not settings.DEBUG,
             samesite='Lax',  # 🔑 CRITICAL: Must be Lax for cross-domain cookies
             path='/',
-            domain='localhost' if settings.DEBUG else None,
+            domain=cookie_domain,
         )
 
         # Debug logging
@@ -137,25 +147,30 @@ class SecureTokenManager:
     def clear_secure_cookies(response):
         """Clear all authentication cookies"""
         from django.conf import settings
-        
+
         # Clear both backend HTTP-only cookies and frontend-set cookies
         cookies_to_clear = ['refresh_token', 'client_fp', 'fp_hash', 'access_token', 'auth-token', 'user-role']
-        
+
         print(f"🧹 Clearing {len(cookies_to_clear)} cookies...")
-        
+
+        # Must match the domain used when setting cookies
+        if not settings.DEBUG:
+            # Production: share cookies across domains
+            domain = '.skillsync.studio'  # Leading dot allows subdomains
+        else:
+            # Development: localhost only
+            domain = 'localhost'
+
         for cookie_name in cookies_to_clear:
-            # Must match the domain used when setting cookies
-            domain = 'localhost' if settings.DEBUG else None
-            
             print(f"  🗑️ Deleting cookie: {cookie_name} (domain={domain})")
-            
+
             response.delete_cookie(
                 cookie_name,
                 path='/',
                 domain=domain,
-                samesite='Lax' if settings.DEBUG else 'Strict'
+                samesite='Lax'
             )
-        
+
         return response
 
 def set_jwt_cookies(response, access_token, refresh_token, request=None):
