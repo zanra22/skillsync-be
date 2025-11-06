@@ -37,30 +37,13 @@ class OnboardingMutation:
         Complete user onboarding by updating profile and creating goals.
         """
         try:
-            # Always use authenticated user unless dev header is present and valid
-            dev_user_id = info.context.request.headers.get('X-Dev-User-ID')
-            is_dev_mode = info.context.request.headers.get('X-Dev-Mode') == 'true'
-            is_development_env = getattr(settings, 'DEBUG', False) and not getattr(settings, 'PRODUCTION', False)
-
-            if is_dev_mode and dev_user_id and is_development_env:
-                logger.info(f"🔧 Development mode: Using user ID {dev_user_id}")
-                try:
-                    user = await sync_to_async(User.objects.get)(id=dev_user_id)
-                    logger.info(f"✅ Development mode: Found user {user.email}")
-                except User.DoesNotExist:
-                    logger.error(f"❌ Development mode: User {dev_user_id} not found")
-                    return CompleteOnboardingPayload(
-                        success=False,
-                        message=f"Development user {dev_user_id} not found"
-                    )
-            else:
-                # Always use authenticated user (dev header not present or not valid)
-                if not info.context.request.user.is_authenticated:
-                    return CompleteOnboardingPayload(
-                        success=False,
-                        message="Authentication required"
-                    )
-                user = info.context.request.user
+            # Require valid authenticated user
+            if not info.context.request.user.is_authenticated:
+                return CompleteOnboardingPayload(
+                    success=False,
+                    message="Authentication required"
+                )
+            user = info.context.request.user
 
             logger.info(f"🚀 Processing onboarding completion for user: {user.email}")
 

@@ -57,37 +57,33 @@ class SecureTokenManager:
             max_age = None  # 🔑 KEY: None = session cookie
             print("🔐 Setting SESSION cookies (browser close = logout)")
         
-        # ⚠️ TEMPORARY: Use SameSite='None' for cross-origin dev testing
-        # When ALLOW_DEV_CORS=True, we need SameSite='None' + Secure=True for localhost→Azure
-        use_cross_origin_cookies = getattr(settings, 'ALLOW_DEV_CORS', False)
-
         # Set refresh token (HTTP-only, secure, with fingerprint)
         response.set_cookie(
             'refresh_token',
             refresh_token,
             max_age=max_age,  # 🔑 Dynamic based on remember_me
             httponly=True,  # Prevents XSS
-            secure=True if use_cross_origin_cookies else (not settings.DEBUG),  # Must be True for SameSite='None'
-            samesite='None' if use_cross_origin_cookies else ('Lax' if settings.DEBUG else 'Strict'),
+            secure=not settings.DEBUG,
+            samesite='Lax' if settings.DEBUG else 'Strict',
             path='/',
-            domain=None,  # Don't set domain for cross-origin cookies
+            domain='localhost' if settings.DEBUG else None,
         )
-        
+
         # Set fingerprint cookie (HTTP-only for validation)
         response.set_cookie(
             'client_fp',
             fingerprint,
             max_age=max_age,  # Match refresh token duration
             httponly=True,
-            secure=True if use_cross_origin_cookies else (not settings.DEBUG),
-            samesite='None' if use_cross_origin_cookies else ('Lax' if settings.DEBUG else 'Strict'),
+            secure=not settings.DEBUG,
+            samesite='Lax' if settings.DEBUG else 'Strict',
             path='/',
-            domain=None,
+            domain='localhost' if settings.DEBUG else None,
         )
-        
+
         # ✅ SECURITY: ALL cookies are HTTP-only
         # No user-role cookie - AuthContext will handle role-based access on client-side
-        
+
         # Set fingerprint hash in another cookie for validation (no session needed)
         fp_hash = hashlib.sha256(fingerprint.encode()).hexdigest()
         response.set_cookie(
@@ -95,24 +91,23 @@ class SecureTokenManager:
             fp_hash,
             max_age=max_age,  # Match refresh token duration
             httponly=True,
-            secure=True if use_cross_origin_cookies else (not settings.DEBUG),
-            samesite='None' if use_cross_origin_cookies else ('Lax' if settings.DEBUG else 'Strict'),
+            secure=not settings.DEBUG,
+            samesite='Lax' if settings.DEBUG else 'Strict',
             path='/',
-            domain=None,
+            domain='localhost' if settings.DEBUG else None,
         )
 
         # Debug logging
-        samesite_value = 'None' if use_cross_origin_cookies else ('Lax' if settings.DEBUG else 'Strict')
-        secure_value = True if use_cross_origin_cookies else (not settings.DEBUG)
+        samesite_value = 'Lax' if settings.DEBUG else 'Strict'
+        secure_value = not settings.DEBUG
 
         print(f"✅ Set authentication cookies:")
         print(f"   refresh_token: {refresh_token[:30]}...")
         print(f"   client_fp: {fingerprint[:20]}...")
         print(f"   fp_hash: {fp_hash[:20]}...")
         print(f"   Max age: {max_age} seconds" if max_age else "   Session cookie (browser close)")
-        print(f"   SameSite: {samesite_value} {'(⚠️ CROSS-ORIGIN MODE)' if use_cross_origin_cookies else ''}")
+        print(f"   SameSite: {samesite_value}")
         print(f"   Secure: {secure_value}")
-        print(f"   ALLOW_DEV_CORS: {use_cross_origin_cookies}")
 
         return response
     

@@ -3,7 +3,7 @@ import ssl
 from dotenv import load_dotenv
 from pathlib import Path
 
-from config.constants import SECRET_KEY, FRONTEND_URL, ENVIRONMENT, DATABASE_CONFIG, NINJA_JWT_CONFIG, ALLOWED_HOSTS_CONFIG, EMAIL_SETTINGS, CORS_ALLOWED_ORIGINS_CONFIG, CSRF_TRUSTED_ORIGINS_CONFIG, ALLOW_DEV_CORS
+from config.constants import SECRET_KEY, FRONTEND_URL, ENVIRONMENT, DATABASE_CONFIG, NINJA_JWT_CONFIG, ALLOWED_HOSTS_CONFIG, EMAIL_SETTINGS, CORS_ALLOWED_ORIGINS_CONFIG, CSRF_TRUSTED_ORIGINS_CONFIG
 
 # Load environment variables from .env file
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -12,14 +12,12 @@ load_dotenv(env_path)
 
 SECRET_KEY = SECRET_KEY
 ENVIRONMENT = ENVIRONMENT  # Make ENVIRONMENT available in settings
-ALLOW_DEV_CORS = ALLOW_DEV_CORS  # ⚠️ TEMPORARY: For development testing
 
 ALLOWED_HOSTS = ALLOWED_HOSTS_CONFIG
 
 print(f"Current Environment: {ENVIRONMENT}")
 print(f"Using SECRET_KEY: {SECRET_KEY}")
 print(f"CORS_ALLOWED_ORIGINS_CONFIG: {CORS_ALLOWED_ORIGINS_CONFIG}")
-print(f"⚠️ ALLOW_DEV_CORS: {ALLOW_DEV_CORS}")
 
 DEBUG = True
 
@@ -149,15 +147,11 @@ RESEND_API_KEY = EMAIL_SETTINGS["RESEND_API_KEY"]
 # CORS Configuration for frontend integration - ENHANCED SECURITY
 CORS_ALLOW_CREDENTIALS = True
 
-# Allow all origins if ENVIRONMENT is not set or is production (for debugging)
-# This handles cases where ENVIRONMENT variable might not be set in Azure
-CORS_ALLOW_ALL_ORIGINS = True  # Temporarily allow all to debug
+# Only allow specific origins for production security
+CORS_ALLOW_ALL_ORIGINS = False
 
-# Fallback: Set allowed origins even if allow_all is True
-# This ensures CORS works even if django-cors-headers behaves unexpectedly
+# Set allowed origins for production
 CORS_ALLOWED_ORIGINS = CORS_ALLOWED_ORIGINS_CONFIG or [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
     "https://www.skillsync.studio",
     "https://skillsync.studio",
 ]

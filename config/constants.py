@@ -11,10 +11,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Application Configuration
 ENVIRONMENT = os.getenv("ENVIRONMENT")
 
-# ⚠️ TEMPORARY: Allow development CORS testing against production backend
-# TODO: REMOVE BEFORE PRODUCTION LAUNCH - See SECURITY_REVERT_CHECKLIST.md
-ALLOW_DEV_CORS = os.getenv("ALLOW_DEV_CORS", "false").lower() == "true"
-
 SECRET_KEY = {
     "development": os.getenv("DEV_SECRET_KEY"),
     "staging": os.getenv("STAG_SECRET_KEY"),
