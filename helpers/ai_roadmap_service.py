@@ -276,14 +276,19 @@ class HybridRoadmapService:
         Enqueue lessons for a module via Azure Service Bus.
         Called when user clicks "Generate" button to generate lessons for a specific module.
         """
+        logger.info(f"📋 [Enqueue] Starting to enqueue module: {module_obj.title} (ID: {module_obj.id})")
+        logger.info(f"📋 [Enqueue] Current module status: {module_obj.generation_status}")
+
         # Generate idempotency key to prevent duplicate processing
         idempotency_key = self._generate_idempotency_key(module_obj)
+        logger.info(f"🔑 [Enqueue] Generated idempotency key: {idempotency_key}")
 
         # Update module with queued status and idempotency key
         module_obj.generation_status = 'queued'
         module_obj.idempotency_key = idempotency_key
         module_obj.generation_started_at = timezone.now()  # ✅ FIXED: Use timezone-aware datetime
         await module_obj.asave()
+        logger.info(f"✅ [Enqueue] Module status updated to 'queued'")
 
         # Prepare message for Azure Service Bus (lesson-generation queue)
         message_data = {
@@ -298,11 +303,13 @@ class HybridRoadmapService:
             'idempotency_key': idempotency_key,
             'timestamp': timezone.now().isoformat()  # ✅ FIXED: Use timezone-aware datetime
         }
+        logger.info(f"📦 [Enqueue] Prepared message data for queue")
 
         # Send message to Azure Service Bus (lesson-generation queue)
+        logger.info(f"🚀 [Enqueue] Calling _send_to_service_bus...")
         await self._send_to_service_bus(message_data, 'lesson-generation')
 
-        logger.info(f"[ServiceBus] Lessons queued for module '{module_obj.title}' with idempotency key: {idempotency_key}")
+        logger.info(f"✅ [Enqueue] Lessons queued for module '{module_obj.title}' with idempotency key: {idempotency_key}")
     
     def _generate_idempotency_key(self, module_obj):
         """Generate a unique idempotency key for the module."""
@@ -348,32 +355,42 @@ class HybridRoadmapService:
         Send a message to Azure Service Bus.
         Falls back to direct processing if Service Bus is not configured.
         """
+        logger.info(f"🔔 [ServiceBus] Starting to send message to queue '{queue_name}'")
+        logger.info(f"📦 [ServiceBus] Message data: module_id={message_data.get('module_id')}, title={message_data.get('title')}")
+
         service_bus_conn_str = os.getenv('AZURE_SERVICE_BUS_CONNECTION_STRING')
 
         if not service_bus_conn_str:
-            logger.warning("⚠️ AZURE_SERVICE_BUS_CONNECTION_STRING not found - falling back to direct processing")
+            logger.error("❌ [ServiceBus] AZURE_SERVICE_BUS_CONNECTION_STRING not found in environment!")
+            logger.error("❌ [ServiceBus] Available env vars: " + ", ".join([k for k in os.environ.keys() if 'AZURE' in k or 'SERVICE' in k]))
             # TODO: Implement direct processing fallback
             return
 
         # Debug: Log that we have the connection string (without exposing the full key)
-        logger.debug(f"[ServiceBus] Using connection string from env (starts with: {service_bus_conn_str[:50]}...)")
-        
+        logger.info(f"✅ [ServiceBus] Found connection string (starts with: {service_bus_conn_str[:50]}...)")
+        logger.info(f"🎯 [ServiceBus] Target queue: {queue_name}")
+
         try:
+            logger.info(f"🔧 [ServiceBus] Creating ServiceBusClient...")
             # Create a Service Bus client
             service_bus_client = ServiceBusClient.from_connection_string(service_bus_conn_str)
 
             # ✅ FIXED: Use async context manager for async code
             async with service_bus_client:
+                logger.info(f"📨 [ServiceBus] Getting queue sender for '{queue_name}'...")
                 sender = service_bus_client.get_queue_sender(queue_name=queue_name)
 
                 # Create a message with the serialized data
+                logger.info(f"📝 [ServiceBus] Creating message with {len(json.dumps(message_data))} bytes...")
                 message = ServiceBusMessage(json.dumps(message_data))
 
                 # Send the message using async context
+                logger.info(f"🚀 [ServiceBus] Sending message to queue...")
                 async with sender:
                     await sender.send_messages(message)
 
-            logger.info(f"[ServiceBus] Message sent to queue '{queue_name}' successfully")
+            logger.info(f"✅ [ServiceBus] Message sent to queue '{queue_name}' successfully")
+            logger.info(f"🎉 [ServiceBus] Module {message_data.get('module_id')} queued for lesson generation")
         except Exception as e:
             logger.error(f"❌ Error sending message to Azure Service Bus: {e}")
             # Update module status to reflect the error
