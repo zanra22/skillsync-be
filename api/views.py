@@ -3,14 +3,18 @@ Custom GraphQL view with JWT cookie support
 """
 from strawberry.django.views import AsyncGraphQLView
 from django.http import HttpResponse
+from contextvars import ContextVar
 import json
+
+# Use contextvars for thread-safe, async-safe storage per request
+_cookie_response_context: ContextVar = ContextVar('cookie_response', default=None)
 
 class CookieResponse:
     """Helper class to store cookies that will be applied to the response"""
     def __init__(self):
         self.cookies = []
-    
-    def set_cookie(self, key, value, max_age=None, expires=None, path='/', 
+
+    def set_cookie(self, key, value, max_age=None, expires=None, path='/',
                    domain=None, secure=False, httponly=False, samesite='Lax'):
         """Store cookie data to be applied later"""
         self.cookies.append({
@@ -24,7 +28,7 @@ class CookieResponse:
             'httponly': httponly,
             'samesite': samesite
         })
-    
+
     def delete_cookie(self, key, path='/', domain=None):
         """Store cookie deletion to be applied later"""
         self.cookies.append({
@@ -42,35 +46,36 @@ class CookieResponse:
 class JWTGraphQLView(AsyncGraphQLView):
     """Custom GraphQL view that supports JWT cookie handling"""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._cookie_response = None  # 🔑 CRITICAL: Store at instance level
-
     async def get_context(self, request, response=None):
         """Override context to include response for cookie handling"""
         context = await super().get_context(request, response)
-        # 🔑 CRITICAL: Use instance-level cookie_response, not a new one
-        # This ensures mutations and dispatch use the SAME context
-        if self._cookie_response is None:
-            self._cookie_response = CookieResponse()
-        context['response'] = self._cookie_response
+
+        # 🔑 CRITICAL: Get or create CookieResponse in context var (thread-safe, async-safe)
+        cookie_response = _cookie_response_context.get()
+        if cookie_response is None:
+            cookie_response = CookieResponse()
+            _cookie_response_context.set(cookie_response)
+
+        context['response'] = cookie_response
         return context
 
     async def dispatch(self, request, *args, **kwargs):
         """Override dispatch to handle response cookies"""
-        # 🔑 CRITICAL: Reset cookie response for this request (avoid cross-request pollution)
-        self._cookie_response = CookieResponse()
+        # 🔑 CRITICAL: Create fresh CookieResponse for this request
+        cookie_response = CookieResponse()
+        token = _cookie_response_context.set(cookie_response)
 
-        # Get the original response
-        response = await super().dispatch(request, *args, **kwargs)
+        try:
+            # Get the original response
+            response = await super().dispatch(request, *args, **kwargs)
 
-        # Apply cookies from context to actual response
-        if self._cookie_response and hasattr(self._cookie_response, 'cookies'):
-            for cookie in self._cookie_response.cookies:
-                print(f"🍪 Applying cookie from dispatch: {cookie['key']}", flush=True)  # Debug
-                response.set_cookie(**cookie)
+            # Apply cookies from context to actual response
+            if cookie_response and hasattr(cookie_response, 'cookies'):
+                for cookie in cookie_response.cookies:
+                    print(f"🍪 Applying cookie from dispatch: {cookie['key']}", flush=True)
+                    response.set_cookie(**cookie)
 
-        # 🔑 CRITICAL: Clean up after request
-        self._cookie_response = None
-
-        return response
+            return response
+        finally:
+            # 🔑 CRITICAL: Clean up after request
+            _cookie_response_context.reset(token)
