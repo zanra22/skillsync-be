@@ -17,15 +17,17 @@ class SecureTokenManager:
     
     @staticmethod
     def create_fingerprint(request):
-        """Create a unique fingerprint for the client"""
+        """
+        Create a unique fingerprint for the client.
+        Uses only User-Agent since other headers can change across requests
+        in production environments (proxies, CDN, etc.)
+        """
         user_agent = request.META.get('HTTP_USER_AGENT', '')
-        accept_language = request.META.get('HTTP_ACCEPT_LANGUAGE', '')
-        accept_encoding = request.META.get('HTTP_ACCEPT_ENCODING', '')
-        
-        # Create fingerprint from client characteristics
-        fingerprint_data = f"{user_agent}{accept_language}{accept_encoding}"
-        fingerprint = hashlib.sha256(fingerprint_data.encode()).hexdigest()[:32]
-        
+
+        # Create fingerprint from the most stable client characteristic
+        # User-Agent is the most reliable identifier that persists across requests
+        fingerprint = hashlib.sha256(user_agent.encode()).hexdigest()[:32]
+
         return fingerprint
     
     @staticmethod
@@ -123,7 +125,11 @@ class SecureTokenManager:
         print(f"   Stored hash: {stored_fp_hash[:20] if stored_fp_hash else 'None'}...")
         print(f"   Current hash: {current_fp_hash[:20]}...")
         print(f"   Match: {stored_fp_hash == current_fp_hash}")
-        print(f"   User-Agent: {request.META.get('HTTP_USER_AGENT', 'Not set')[:50]}...")
+        print(f"   User-Agent: {request.META.get('HTTP_USER_AGENT', 'Not set')[:70]}...")
+
+        if not stored_fp_hash:
+            print(f"   ⚠️ No stored fingerprint hash - skipping validation")
+            return True  # Allow if no stored hash (first-time authentication)
 
         return stored_fp_hash == current_fp_hash
     
