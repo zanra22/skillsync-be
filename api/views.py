@@ -56,7 +56,9 @@ class JWTGraphQLView(AsyncGraphQLView):
             cookie_response = CookieResponse()
             _cookie_response_context.set(cookie_response)
 
-        context['response'] = cookie_response
+        # 🔑 CRITICAL: Use attribute assignment, not dict assignment
+        # StrawberryDjangoContext is an object, not a dict
+        context.response = cookie_response
         return context
 
     async def dispatch(self, request, *args, **kwargs):
