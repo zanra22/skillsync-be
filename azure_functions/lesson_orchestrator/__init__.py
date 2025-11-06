@@ -109,7 +109,6 @@ class LessonOrchestrationService:
                         title
                         generationStatus
                         generationError
-                        lessonsCount
                     }
                 }
             }
