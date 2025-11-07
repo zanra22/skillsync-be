@@ -587,10 +587,14 @@ class LessonsMutation:
             raise Exception("Authentication required")
 
         try:
-            # Get module with roadmap relationship prefetched (avoid async ORM access)
-            module = await Module.objects.select_related('roadmap').filter(id=module_id).afirst()
+            # Get module with ownership verification (single efficient query)
+            module = await Module.objects.select_related('roadmap').filter(
+                id=module_id,
+                roadmap__user_id=str(user.id)  # ✅ Verify user owns this module
+            ).afirst()
+
             if not module:
-                raise Exception(f"Module not found: {module_id}")
+                raise Exception(f"Module not found or you don't have permission to access it")
 
             # Check if already generated/in-progress
             if module.generation_status in ['completed', 'in_progress']:
