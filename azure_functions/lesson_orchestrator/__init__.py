@@ -253,23 +253,12 @@ async def main(lessonmessage: func.ServiceBusMessage, context: func.Context):
         db_connection = db
         logger.info(f"[LessonOrchestrator] Database connected")
 
-        # ============================================
-        # STEP 3: Update module status to 'in_progress'
-        # ============================================
-        try:
-            current_time = datetime.now(timezone.utc).isoformat()
-            cursor = db.execute(
-                """UPDATE lessons_module
-                   SET generation_status=%s, generation_started_at=%s
-                   WHERE id=%s""",
-                ('in_progress', current_time, module_id)
-            )
-            logger.info(f"[LessonOrchestrator] Module status updated to 'in_progress'")
-        except Exception as e:
-            logger.warning(f"[LessonOrchestrator] Could not update module status: {e}")
+        # NOTE: Do NOT update status to 'in_progress' here
+        # Django mutation will handle status updates when called with request key
+        # This prevents Azure Function from blocking the Django mutation (which checks status)
 
         # ============================================
-        # STEP 4: Call Django GraphQL API to generate lessons
+        # STEP 3: Call Django GraphQL API to generate lessons
         # ============================================
         logger.info(f"[LessonOrchestrator] Calling Django API to generate lessons...")
         api_result = await lesson_service.generate_lesson_via_api(message_data)
