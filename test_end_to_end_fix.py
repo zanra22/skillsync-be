@@ -132,7 +132,7 @@ async def get_access_token():
         response = requests.post(
             DJANGO_URL,
             json={'query': mutation, 'variables': variables},
-            timeout=10
+            timeout=60
         )
     except requests.exceptions.Timeout:
         print_error(f"OTP verification request timed out (10s)")
@@ -201,7 +201,7 @@ async def trigger_lesson_generation(access_token):
             DJANGO_URL,
             json={'query': mutation, 'variables': variables},
             headers=headers,
-            timeout=10
+            timeout=60
         )
     except requests.exceptions.Timeout:
         print_error(f"Lesson generation request timed out (10s)")

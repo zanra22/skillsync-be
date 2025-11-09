@@ -22,6 +22,8 @@ share/python-wheels/
 *.manifest
 pip-log.txt
 pip-delete-this-directory.txt
+*.webm
+helpers/youtube/skillsync-472422-edf9505e3f46.json
 
 # Virtual Environment
 venv/
