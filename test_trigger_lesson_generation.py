@@ -74,8 +74,8 @@ def list_modules(user_email=None):
 
 
 def get_access_token_from_login(email, password, api_url):
-    """Login and get access token."""
-    print(f"\n🔑 Logging in as {email}...")
+    """Login and get access token with OTP verification."""
+    print(f"\n[K] Logging in as {email}...")
 
     login_mutation = """
     mutation Login($input: LoginInput!) {
@@ -116,14 +116,70 @@ def get_access_token_from_login(email, password, api_url):
             print(f"Response text: {response.text[:500]}")
             return None
 
-        print(f"📡 Response: {json.dumps(result, indent=2)}")
+        print(f"[>>] Response: {json.dumps(result, indent=2)}")
 
-        if result and result.get('data', {}).get('auth', {}).get('login', {}).get('success'):
-            token = result['data']['auth']['login']['accessToken']
+        login_response = result.get('data', {}).get('auth', {}).get('login', {})
+
+        # Check if OTP is required (accessToken is null but OTP message present)
+        if not login_response.get('accessToken') and 'OTP' in login_response.get('message', ''):
+            print(f"\n[i] OTP sent to {email}")
+            otp_code = input("Enter OTP code: ").strip()
+
+            # Verify OTP
+            verify_otp_mutation = """
+            mutation VerifyOtp($input: VerifyOtpInput!) {
+                auth {
+                    verifyOtp(input: $input) {
+                        success
+                        message
+                        accessToken
+                        user {
+                            id
+                            email
+                            role
+                        }
+                    }
+                }
+            }
+            """
+
+            otp_response = requests.post(
+                api_url,
+                json={
+                    'query': verify_otp_mutation,
+                    'variables': {
+                        'input': {
+                            'email': email,
+                            'otp': otp_code
+                        }
+                    }
+                },
+                headers={'Content-Type': 'application/json'}
+            )
+
+            if otp_response.status_code == 200:
+                otp_result = otp_response.json()
+                print(f"[>>] OTP Response: {json.dumps(otp_result, indent=2)}")
+
+                otp_login = otp_result.get('data', {}).get('auth', {}).get('verifyOtp', {})
+                if otp_login.get('success'):
+                    token = otp_login.get('accessToken')
+                    print(f"[OK] OTP verified! Access token obtained.")
+                    return token
+                else:
+                    print(f"[X] OTP verification failed: {otp_login.get('message')}")
+            else:
+                print(f"[X] OTP request failed: {otp_response.status_code}")
+
+            return None
+
+        # Check if token was returned directly (no OTP required)
+        if login_response.get('success') and login_response.get('accessToken'):
+            token = login_response.get('accessToken')
             print(f"[OK] Login successful! Token obtained.")
             return token
         else:
-            message = result.get('data', {}).get('auth', {}).get('login', {}).get('message') if result else 'No response data'
+            message = login_response.get('message', 'No response data')
             print(f"[X] Login failed: {message}")
             if result and 'errors' in result:
                 print(f"GraphQL errors: {result['errors']}")
