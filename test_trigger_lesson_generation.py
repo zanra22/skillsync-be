@@ -127,9 +127,9 @@ def get_access_token_from_login(email, password, api_url):
 
             # Verify OTP
             verify_otp_mutation = """
-            mutation VerifyOtp($input: VerifyOtpInput!) {
+            mutation VerifyOTP($input: VerifyOTPInput!) {
                 auth {
-                    verifyOtp(input: $input) {
+                    verifyOTP(input: $input) {
                         success
                         message
                         accessToken
@@ -161,7 +161,12 @@ def get_access_token_from_login(email, password, api_url):
                 otp_result = otp_response.json()
                 print(f"[>>] OTP Response: {json.dumps(otp_result, indent=2)}")
 
-                otp_login = otp_result.get('data', {}).get('auth', {}).get('verifyOtp', {})
+                # Check for errors first
+                if otp_result.get('errors'):
+                    print(f"[X] GraphQL Errors: {otp_result['errors']}")
+                    return None
+
+                otp_login = otp_result.get('data', {}).get('auth', {}).get('verifyOTP', {})
                 if otp_login.get('success'):
                     token = otp_login.get('accessToken')
                     print(f"[OK] OTP verified! Access token obtained.")
