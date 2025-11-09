@@ -113,11 +113,13 @@ Date: October 9, 2025
 
 import strawberry
 import logging
+import secrets
 from typing import Optional
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 
-from .models import LessonContent, LessonVote, MentorReview
+from .models import LessonContent, LessonVote, MentorReview, LessonGenerationRequest
+from .request_key_validator import RequestKeyValidator
 from .types import (
     VoteLessonInput,
     VoteLessonPayload,
@@ -562,6 +564,12 @@ class LessonsMutation:
         Status flow:
         - not_started → queued → in_progress → completed/failed
 
+        Security:
+        - Generates unique one-time request key (like OTP)
+        - Key is stored in database and passed to Azure Function
+        - Azure Function returns key in request headers to Django for validation
+        - Key is deleted after validation (single-use only)
+
         Args:
             info: GraphQL context
             module_id: Module ID to generate lessons for
@@ -582,11 +590,39 @@ class LessonsMutation:
             }
         """
         user = info.context.request.user
+        request = info.context.request
 
         if not user.is_authenticated:
             raise Exception("Authentication required")
 
         try:
+            # ============================================
+            # STEP 0: Check for Azure Function request key
+            # ============================================
+            # Azure Function includes one-time request key for service-to-service auth
+            request_key_from_headers = RequestKeyValidator.get_request_key_from_headers(request)
+            user_id_from_headers = RequestKeyValidator.get_user_id_from_headers(request)
+
+            if request_key_from_headers:
+                # This is a request from Azure Function (service-to-service)
+                logger.info(f"🔑 [Validation] Azure Function request detected (has request key in headers)")
+                logger.info(f"   Validating request key...")
+
+                try:
+                    # Validate the request key
+                    await RequestKeyValidator.validate_request_key(
+                        request_key=request_key_from_headers,
+                        user_id=user_id_from_headers or str(user.id),
+                        module_id=module_id
+                    )
+                    logger.info(f"✅ [Validation] Request key validated successfully")
+                except Exception as validation_error:
+                    logger.error(f"❌ [Validation] Request key validation failed: {validation_error}")
+                    raise Exception(f"Request key validation failed: {str(validation_error)}")
+            else:
+                # Regular user request from frontend - normal auth applies
+                logger.debug(f"👤 Regular user request (no request key in headers)")
+
             # Get module with ownership verification (single efficient query)
             module = await Module.objects.select_related('roadmap').filter(
                 id=module_id,
@@ -603,6 +639,20 @@ class LessonsMutation:
 
             logger.info(f"🚀 On-demand generation requested for module: {module.title}")
 
+            # ============================================
+            # STEP 1: Generate unique one-time request key
+            # ============================================
+            request_key = secrets.token_urlsafe(32)
+            logger.info(f"🔑 Generated request key for secure authentication")
+
+            # Save key to database (will be deleted after validation)
+            await sync_to_async(LessonGenerationRequest.objects.create)(
+                module_id=module_id,
+                user_id=str(user.id),
+                request_key=request_key
+            )
+            logger.debug(f"   Key stored in database for validation")
+
             # Get user profile for personalization
             user_profile = None
             try:
@@ -617,10 +667,16 @@ class LessonsMutation:
             # Import here to avoid circular dependency
             from helpers.ai_roadmap_service import HybridRoadmapService
 
-            # Enqueue for generation via Azure Service Bus
+            # ============================================
+            # STEP 2: Enqueue for generation via Azure Service Bus
+            # ============================================
             roadmap_service = HybridRoadmapService()
             try:
-                await roadmap_service.enqueue_module_for_generation(module, user_profile)
+                await roadmap_service.enqueue_module_for_generation(
+                    module,
+                    user_profile,
+                    request_key=request_key  # ← Include key in message
+                )
                 logger.info(f"✅ Module queued for generation: {module.title}")
             finally:
                 # Cleanup async resources (critical on Windows)

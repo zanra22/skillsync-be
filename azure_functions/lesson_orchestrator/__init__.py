@@ -90,15 +90,28 @@ class LessonOrchestrationService:
         2. Reuses existing lesson generation logic
         3. Allows Django to update module status atomically
 
+        Security:
+        - Extracts one-time request key from Service Bus message
+        - Includes key in custom X-Request-Key header
+        - Django validates key and deletes it after use (single-use pattern)
+
         Args:
-            message_data: Message from Service Bus containing module info
+            message_data: Message from Service Bus containing module info + request_key
 
         Returns:
             dict: API response with generation status
         """
         try:
             module_id = message_data.get('module_id')
+            user_id = message_data.get('user_id')
+            request_key = message_data.get('request_key')
+
             logger.info(f"[LessonOrchestrator] Triggering lesson generation for module: {module_id}")
+
+            if request_key:
+                logger.info(f"[LessonOrchestrator] 🔑 Request key present for secure authentication")
+            else:
+                logger.warning(f"[LessonOrchestrator] ⚠️ No request key in message (expected from Django)")
 
             # GraphQL mutation to generate module lessons
             graphql_query = """
@@ -124,11 +137,31 @@ class LessonOrchestrationService:
             logger.info(f"[LessonOrchestrator] Calling Django API: {self.django_api_url}")
             logger.debug(f"[LessonOrchestrator] Payload: {json.dumps(payload)}")
 
+            # ============================================
+            # Build headers with request key (if present)
+            # ============================================
+            headers = {
+                "Content-Type": "application/json"
+            }
+
+            # Include request key for Django validation (single-use pattern)
+            if request_key:
+                headers["X-Request-Key"] = request_key
+                logger.debug(f"[LessonOrchestrator] 🔐 Request key included in headers")
+
+                # Also include user ID and module ID for validation
+                if user_id:
+                    headers["X-User-ID"] = user_id
+                    logger.debug(f"[LessonOrchestrator] 👤 User ID included in headers")
+
+                headers["X-Module-ID"] = module_id
+                logger.debug(f"[LessonOrchestrator] 📦 Module ID included in headers")
+
             # Call Django GraphQL endpoint
             response = requests.post(
                 self.django_api_url,
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=300  # 5 minute timeout for lesson generation
             )
 

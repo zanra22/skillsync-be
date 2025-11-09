@@ -682,3 +682,57 @@ class MentorReview(models.Model):
     
     def __str__(self):
         return f"{self.mentor.email} {self.status} {self.lesson_content.title}"
+
+
+class LessonGenerationRequest(models.Model):
+    """
+    Stores one-time request keys for Azure Function authentication.
+
+    When a user triggers lesson generation:
+    1. Django generates a unique request_key
+    2. Key is saved here with user_id and module_id
+    3. Key is included in Service Bus message
+    4. Azure Function includes key in request headers back to Django
+    5. Django validates key exists, belongs to this user, hasn't been used
+    6. Django deletes key after validation (single-use pattern)
+
+    Similar to OTP: unique per request, deleted after first valid use.
+    """
+    id = models.CharField(
+        max_length=10,
+        primary_key=True,
+        default=generate_short_id,
+        unique=True,
+    )
+    module_id = models.CharField(
+        max_length=10,
+        db_index=True,
+        help_text="Module ID this key is for"
+    )
+    user_id = models.CharField(
+        max_length=100,
+        db_index=True,
+        help_text="User ID who requested the generation"
+    )
+    request_key = models.CharField(
+        max_length=255,
+        unique=True,
+        db_index=True,
+        help_text="Cryptographically secure unique key"
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True
+    )
+
+    class Meta:
+        verbose_name = "Lesson Generation Request"
+        verbose_name_plural = "Lesson Generation Requests"
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['request_key']),
+            models.Index(fields=['user_id', 'module_id']),
+        ]
+
+    def __str__(self):
+        return f"Key for module {self.module_id} by user {self.user_id}"
