@@ -59,12 +59,12 @@ def list_modules(user_email=None):
         modules = roadmap.modules.all().order_by('order')
         for module in modules:
             status_emoji = {
-                'not_started': '⚪',
-                'queued': '🟡',
-                'in_progress': '🔵',
-                'completed': '🟢',
-                'failed': '🔴'
-            }.get(module.generation_status, '❓')
+                'not_started': '[_]',
+                'queued': '[*]',
+                'in_progress': '[>]',
+                'completed': '[OK]',
+                'failed': '[X]'
+            }.get(module.generation_status, '[?]')
 
             print(f"    {status_emoji} {module.title}")
             print(f"       ID: {module.id}")
@@ -112,7 +112,7 @@ def get_access_token_from_login(email, password, api_url):
         try:
             result = response.json()
         except Exception as e:
-            print(f"❌ Failed to parse response: {e}")
+            print(f"[X] Failed to parse response: {e}")
             print(f"Response text: {response.text[:500]}")
             return None
 
@@ -120,15 +120,15 @@ def get_access_token_from_login(email, password, api_url):
 
         if result and result.get('data', {}).get('auth', {}).get('login', {}).get('success'):
             token = result['data']['auth']['login']['accessToken']
-            print(f"✅ Login successful! Token obtained.")
+            print(f"[OK] Login successful! Token obtained.")
             return token
         else:
             message = result.get('data', {}).get('auth', {}).get('login', {}).get('message') if result else 'No response data'
-            print(f"❌ Login failed: {message}")
+            print(f"[X] Login failed: {message}")
             if result and 'errors' in result:
                 print(f"GraphQL errors: {result['errors']}")
     else:
-        print(f"❌ Login request failed: {response.status_code}")
+        print(f"[X] Login request failed: {response.status_code}")
         print(f"Response: {response.text[:500]}")
 
     return None
@@ -149,7 +149,7 @@ def trigger_lesson_generation(module_id, access_token, api_url):
         print(f"   Current lessons: {module.lessons.count()}")
         print()
     except Module.DoesNotExist:
-        print(f"❌ Module not found: {module_id}")
+        print(f"[X] Module not found: {module_id}")
         return
 
     # GraphQL mutation
@@ -190,7 +190,7 @@ def trigger_lesson_generation(module_id, access_token, api_url):
         result = response.json()
 
         if 'errors' in result:
-            print(f"\n❌ GraphQL Errors:")
+            print(f"\n[X] GraphQL Errors:")
             for error in result['errors']:
                 print(f"   {error.get('message')}")
             return
@@ -198,7 +198,7 @@ def trigger_lesson_generation(module_id, access_token, api_url):
         data = result.get('data', {}).get('lessons', {}).get('generateModuleLessons')
 
         if data:
-            print(f"\n✅ Mutation successful!")
+            print(f"\n[OK] Mutation successful!")
             print(f"   Module ID: {data['id']}")
             print(f"   Title: {data['title']}")
             print(f"   New status: {data['generationStatus']}")
@@ -215,10 +215,10 @@ def trigger_lesson_generation(module_id, access_token, api_url):
             print(f"   - Function App logs: Azure Function processing logs")
             print(f"   - Service Bus: Check queue messages")
         else:
-            print(f"\n⚠️ No data in response:")
+            print(f"\n[!] No data in response:")
             print(json.dumps(result, indent=2))
     else:
-        print(f"\n❌ Request failed: {response.status_code}")
+        print(f"\n[X] Request failed: {response.status_code}")
         print(response.text[:500])
 
 
@@ -242,7 +242,7 @@ def main():
 
     # Trigger generation mode
     if not args.module_id:
-        print("❌ Error: --module-id is required")
+        print("[X] Error: --module-id is required")
         parser.print_help()
         return
 
@@ -253,7 +253,7 @@ def main():
         access_token = get_access_token_from_login(args.email, args.password, args.api_url)
 
     if not access_token:
-        print("❌ Error: Authentication required")
+        print("[X] Error: Authentication required")
         print("   Provide either:")
         print("   1. --access-token TOKEN")
         print("   2. --email EMAIL --password PASSWORD")
