@@ -21,6 +21,8 @@ import subprocess
 import time
 from typing import Optional
 
+from .cookies_manager import YouTubeCookiesManager
+
 logger = logging.getLogger(__name__)
 
 # Lazy import of yt-dlp to avoid import errors if not installed
@@ -146,8 +148,10 @@ class GroqTranscription:
             audio_file = tmp.name
             tmp.close()
 
-            # Get optional cookies file for age-restricted videos
-            cookies_file = os.getenv('YOUTUBE_COOKIES_FILE') or os.getenv('YT_COOKIES_FILE')
+            # Get cookies file (auto-export from browser if needed)
+            cookies_file = YouTubeCookiesManager.get_cookies_file()
+            if cookies_file:
+                logger.debug(f"📝 Using cookies for YouTube authentication: {cookies_file[:50]}...")
 
             # Try using yt-dlp Python API first
             yt_dlp = _get_yt_dlp()
@@ -181,7 +185,11 @@ class GroqTranscription:
                     return audio_file
 
                 except Exception as api_err:
-                    logger.debug(f"yt-dlp Python API failed: {str(api_err)[:200]}, falling back to subprocess")
+                    error_msg = str(api_err)[:200]
+                    # Check if it's a bot detection error
+                    if 'bot' in error_msg.lower() or 'sign in' in error_msg.lower():
+                        logger.warning(f"🤖 Bot detection error - YouTube cookies needed. Set YOUTUBE_COOKIES_FILE environment variable")
+                    logger.debug(f"yt-dlp Python API failed: {error_msg}, falling back to subprocess")
 
             # Fallback to subprocess mode
             logger.debug("Using yt-dlp subprocess mode...")
@@ -229,6 +237,15 @@ class GroqTranscription:
                     last_err = cpe
                     stderr = (cpe.stderr or '')[:2000]
                     logger.warning(f"⚠️ yt-dlp failed (exit {cpe.returncode}) on attempt {attempt}: {stderr}")
+
+                    # If bot detection error, don't retry - need cookies
+                    if 'bot' in stderr.lower() or 'sign in' in stderr.lower():
+                        logger.warning("🤖 Bot detection error - YouTube requires authentication")
+                        if not cookies_file:
+                            logger.info("🔐 Configure YOUTUBE_COOKIES_FILE environment variable to handle bot detection")
+                            logger.info("   See: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp")
+                        # Don't retry if bot blocked
+                        break
 
                     # If 403 (forbidden), likely age/geo restricted
                     if '403' in stderr or 'forbidden' in stderr.lower():
