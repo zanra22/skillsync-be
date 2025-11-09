@@ -592,16 +592,15 @@ class LessonsMutation:
         user = info.context.request.user
         request = info.context.request
 
-        if not user.is_authenticated:
-            raise Exception("Authentication required")
-
         try:
             # ============================================
-            # STEP 0: Check for Azure Function request key
+            # STEP 0: Check for Azure Function request key FIRST
             # ============================================
             # Azure Function includes one-time request key for service-to-service auth
             request_key_from_headers = RequestKeyValidator.get_request_key_from_headers(request)
             user_id_from_headers = RequestKeyValidator.get_user_id_from_headers(request)
+
+            verified_user_id = None  # Track which user (from auth or headers)
 
             if request_key_from_headers:
                 # This is a request from Azure Function (service-to-service)
@@ -609,24 +608,31 @@ class LessonsMutation:
                 logger.info(f"   Validating request key...")
 
                 try:
-                    # Validate the request key
+                    # Validate the request key (will raise if invalid)
                     await RequestKeyValidator.validate_request_key(
                         request_key=request_key_from_headers,
-                        user_id=user_id_from_headers or str(user.id),
+                        user_id=user_id_from_headers,
                         module_id=module_id
                     )
                     logger.info(f"✅ [Validation] Request key validated successfully")
+                    # Use user_id from headers for authenticated service requests
+                    verified_user_id = user_id_from_headers
                 except Exception as validation_error:
                     logger.error(f"❌ [Validation] Request key validation failed: {validation_error}")
                     raise Exception(f"Request key validation failed: {str(validation_error)}")
             else:
-                # Regular user request from frontend - normal auth applies
+                # Regular user request from frontend - enforce authentication
+                if not user.is_authenticated:
+                    raise Exception("Authentication required")
+
                 logger.debug(f"👤 Regular user request (no request key in headers)")
+                # Use authenticated user's ID
+                verified_user_id = str(user.id)
 
             # Get module with ownership verification (single efficient query)
             module = await Module.objects.select_related('roadmap').filter(
                 id=module_id,
-                roadmap__user_id=str(user.id)  # ✅ Verify user owns this module
+                roadmap__user_id=verified_user_id  # ✅ Verify user owns this module (from either auth or headers)
             ).afirst()
 
             if not module:
