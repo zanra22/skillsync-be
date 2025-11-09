@@ -18,6 +18,40 @@ DATABASES = {
 
 print(f"Production DATABASES: {DATABASES}")
 
+# Azure Key Vault - Read YouTube Service Account Credentials
+# Reads the service account JSON from Azure Key Vault for YouTube OAuth2 authentication
+try:
+    from azure.identity import DefaultAzureCredential
+    from azure.keyvault.secrets import SecretClient
+    import json
+
+    KEYVAULT_URL = os.getenv('AZURE_KEYVAULT_URL')
+    if KEYVAULT_URL:
+        try:
+            credential = DefaultAzureCredential()
+            secret_client = SecretClient(vault_url=KEYVAULT_URL, credential=credential)
+
+            # Retrieve YouTube service account JSON from Key Vault
+            youtube_secret = secret_client.get_secret("youtube-service-account-json")
+            if youtube_secret:
+                # The secret contains the JSON content as a string
+                YOUTUBE_SERVICE_ACCOUNT = json.loads(youtube_secret.value)
+                print("[OK] Loaded YouTube service account from Azure Key Vault")
+            else:
+                print("[WARN] youtube-service-account-json not found in Key Vault")
+                YOUTUBE_SERVICE_ACCOUNT = None
+        except Exception as e:
+            print(f"[WARN] Failed to load YouTube service account from Key Vault: {e}")
+            YOUTUBE_SERVICE_ACCOUNT = None
+    else:
+        print("[INFO] AZURE_KEYVAULT_URL not set - YouTube service account will not be loaded from Key Vault")
+        YOUTUBE_SERVICE_ACCOUNT = None
+
+except ImportError:
+    # Azure SDK not available (shouldn't happen in production)
+    print("[WARN] Azure SDK not available - YouTube service account authentication disabled")
+    YOUTUBE_SERVICE_ACCOUNT = None
+
 # CRITICAL FIX: Remove CORS_ALLOWED_ORIGINS from globals in production
 # This ensures django-cors-headers respects CORS_ALLOW_ALL_ORIGINS = True
 # CORS_ALLOWED_ORIGINS comes from 'from .base import *', so we must delete it from globals()

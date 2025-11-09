@@ -34,19 +34,63 @@ class YouTubeService:
     - Integrate with transcript service for fallback
     """
 
-    def __init__(self, api_key: str, groq_api_key: Optional[str] = None):
+    def __init__(self, api_key: str, groq_api_key: Optional[str] = None, service_account: Optional[Dict] = None):
         """
         Initialize YouTube service.
 
         Args:
-            api_key: YouTube Data API v3 key
+            api_key: YouTube Data API v3 key (legacy, for backward compatibility)
             groq_api_key: Optional Groq API key for transcription fallback
+            service_account: Optional Google Cloud service account dict with OAuth2 credentials
         """
         self.youtube_api_key = api_key
         self.groq_api_key = groq_api_key
+        self.service_account = service_account
         self.quality_ranker = YouTubeQualityRanker()
         self.transcript_service = TranscriptService(api_key, groq_api_key)
         self.last_youtube_call = 0
+        self._youtube_service = None  # Lazy loaded YouTube API service
+
+    def _get_youtube_service(self):
+        """
+        Build and cache YouTube API service using best available credentials.
+
+        Priority:
+        1. OAuth2 with Google Cloud service account (for server-to-server auth)
+        2. Simple API key (legacy fallback)
+        """
+        if self._youtube_service is not None:
+            return self._youtube_service
+
+        try:
+            from googleapiclient.discovery import build
+            from google.oauth2 import service_account
+
+            # Try OAuth2 with service account first (prevents bot detection)
+            if self.service_account:
+                try:
+                    credentials = service_account.Credentials.from_service_account_info(
+                        self.service_account,
+                        scopes=['https://www.googleapis.com/auth/youtube.readonly']
+                    )
+                    self._youtube_service = build('youtube', 'v3', credentials=credentials)
+                    logger.info("[OK] YouTube API using OAuth2 service account authentication")
+                    return self._youtube_service
+                except Exception as e:
+                    logger.warning(f"[WARN] Failed to use service account auth: {e}, falling back to API key")
+
+            # Fallback to simple API key
+            if self.youtube_api_key:
+                self._youtube_service = build('youtube', 'v3', developerKey=self.youtube_api_key)
+                logger.info("[OK] YouTube API using simple API key (developerKey)")
+                return self._youtube_service
+
+            logger.error("[X] No YouTube credentials available (no service account or API key)")
+            return None
+
+        except Exception as e:
+            logger.error(f"[X] Failed to build YouTube API service: {e}")
+            return None
 
     def search_and_rank(self, topic: str, max_results: int = 3) -> Optional[Dict]:
         """
@@ -67,13 +111,12 @@ class YouTubeService:
         Returns:
             Video metadata with quality indicators or None
         """
-        if not self.youtube_api_key:
-            logger.error("❌ YouTube API key not configured")
+        youtube = self._get_youtube_service()
+        if not youtube:
+            logger.error("YouTube API not available (no credentials configured)")
             return None
 
         try:
-            from googleapiclient.discovery import build
-            youtube = build('youtube', 'v3', developerKey=self.youtube_api_key)
 
             # Search for video
             search_query = f"{topic} tutorial programming"

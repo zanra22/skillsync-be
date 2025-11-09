@@ -74,3 +74,14 @@ coverage.xml
 
 # Azure Functions
 azure_functions/local.settings.json
+
+# Sensitive Credentials & Keys
+*.json.key
+*-key.json
+*-credentials.json
+*service*account*.json
+*serviceAccount*.json
+youtube_cookies.txt
+.env.local
+.env.*.local
+credentials.json

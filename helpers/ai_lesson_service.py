@@ -68,15 +68,32 @@ class LessonGenerationService:
         self.unsplash_api_key = os.getenv('UNSPLASH_ACCESS_KEY')
         self.groq_api_key = os.getenv('GROQ_API_KEY')  # For Whisper transcription fallback
         self.openrouter_api_key = os.getenv('OPENROUTER_API_KEY')  # For DeepSeek V3.1 FREE
-        
+
+        # YouTube service account for OAuth2 authentication (prevents bot detection)
+        # Loaded from Django settings (either from Key Vault in production or env var)
+        try:
+            from django.conf import settings
+            self.youtube_service_account = getattr(settings, 'YOUTUBE_SERVICE_ACCOUNT', None)
+        except Exception as e:
+            logger.warning(f"Could not load YouTube service account from Django settings: {e}")
+            self.youtube_service_account = None
+
         # Multi-source research engine
         self.research_engine = multi_source_research_engine
         logger.info("🔬 Multi-source research engine initialized")
 
         # YouTube service with quality ranking and transcript fallback
-        self.youtube_service = YouTubeService(self.youtube_api_key, self.groq_api_key)
+        # Now with OAuth2 service account authentication (prevents bot detection)
+        self.youtube_service = YouTubeService(
+            self.youtube_api_key,
+            self.groq_api_key,
+            service_account=self.youtube_service_account
+        )
         self.video_analyzer = VideoAnalyzer()
-        logger.info("🎥 YouTube service initialized with quality ranking")
+        if self.youtube_service_account:
+            logger.info("🎥 YouTube service initialized with OAuth2 service account authentication")
+        else:
+            logger.info("🎥 YouTube service initialized with API key fallback")
 
         # API URLs - Use Gemini 2.0 Flash Experimental (stable, free tier)
         # Free tier: 15 RPM, 200 RPD (better RPM than 2.5 Flash which has 10 RPM)
