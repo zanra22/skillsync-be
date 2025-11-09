@@ -1,267 +1,189 @@
 """
-Test script for LessonGenerationService
-Tests all 4 learning styles: hands_on, video, reading, mixed
+Quick Integration Test - All 4 Learning Styles
+
+This script tests that lesson generation works for all learning styles.
+Run from: skillsync-be/ directory
+
+Usage:
+    python test_lesson_generation.py
 """
+
 import os
 import sys
-import django
+import asyncio
 import json
-from pathlib import Path
+import logging
+from datetime import datetime
 
-# Setup Django
-sys.path.append(str(Path(__file__).parent))
+# Setup Django before importing anything else
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings.dev')
+
+import django
 django.setup()
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Import the lesson generation service
 from helpers.ai_lesson_service import LessonGenerationService, LessonRequest
-from dataclasses import dataclass
 
 
-@dataclass
-class TestUserProfile:
-    """Mock user profile for testing"""
-    role: str = 'learner'
-    industry: str = 'Technology'
-    career_stage: str = 'entry_level'
-    learning_style: str = 'hands_on'
-    time_commitment: str = '3-5'
+async def test_all_learning_styles():
+    """Test lesson generation for all 4 learning styles"""
 
+    logger.info("=" * 80)
+    logger.info("LESSON GENERATION - ALL LEARNING STYLES TEST")
+    logger.info("=" * 80)
 
-def print_separator(title):
-    """Print a nice separator"""
-    print("\n" + "=" * 80)
-    print(f"  {title}")
-    print("=" * 80 + "\n")
-
-
-def test_hands_on_lesson():
-    """Test hands-on lesson generation"""
-    print_separator("TEST 1: HANDS-ON LESSON GENERATION")
-    
+    # Initialize service
+    logger.info("Initializing LessonGenerationService...")
     service = LessonGenerationService()
-    profile = TestUserProfile(learning_style='hands_on')
-    
-    print("📝 Generating hands-on lesson: Python Variables...")
-    print(f"   Learning Style: {profile.learning_style}")
-    print(f"   Industry: {profile.industry}")
-    print(f"   Career Stage: {profile.career_stage}\n")
-    
-    try:
-        request = LessonRequest(
-            step_title="Python Variables",
-            lesson_number=1,
-            learning_style="hands_on",
-            user_profile=profile,
-            difficulty='beginner',
-            industry=profile.industry
-        )
-        lesson = service.generate_lesson(request)
-        
-        print("✅ Lesson generated successfully!")
-        print(f"   Type: {lesson['type']}")
-        print(f"   Title: {lesson.get('title', 'N/A')}")
-        print(f"   Estimated Duration: {lesson.get('estimated_duration', 'N/A')} minutes")
-        print(f"   Has Code Editor: {lesson.get('has_code_editor', False)}")
-        print(f"   Number of Exercises: {len(lesson.get('exercises', []))}")
-        
-        # Show first exercise
-        if lesson.get('exercises'):
-            print(f"\n📚 First Exercise:")
-            ex = lesson['exercises'][0]
-            print(f"   Title: {ex.get('title', 'N/A')}")
-            print(f"   Difficulty: {ex.get('difficulty', 'N/A')}")
-            print(f"   Has Hints: {len(ex.get('hints', []))} hints")
-        
-        return True
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
 
-
-def test_video_lesson():
-    """Test video lesson generation"""
-    print_separator("TEST 2: VIDEO LESSON GENERATION")
-    
-    service = LessonGenerationService()
-    profile = TestUserProfile(learning_style='video')
-    
-    print("🎥 Generating video lesson: JavaScript Functions...")
-    print(f"   Learning Style: {profile.learning_style}")
-    print(f"   Will search YouTube for best tutorial\n")
-    
-    try:
-        request = LessonRequest(
-            step_title="JavaScript Functions",
-            lesson_number=1,
-            learning_style="video",
-            user_profile=profile,
-            difficulty='beginner',
-            industry=profile.industry
-        )
-        lesson = service.generate_lesson(request)
-        
-        print("✅ Lesson generated successfully!")
-        print(f"   Type: {lesson['type']}")
-        print(f"   Has Video: {lesson.get('has_video', False)}")
-        print(f"   Video ID: {lesson.get('video_id', 'N/A')}")
-        print(f"   Video URL: {lesson.get('video_url', 'N/A')}")
-        print(f"   Summary Length: {len(lesson.get('summary', ''))} characters")
-        print(f"   Key Concepts: {len(lesson.get('key_concepts', []))} points")
-        print(f"   Timestamps: {len(lesson.get('timestamps', []))} markers")
-        print(f"   Quiz Questions: {len(lesson.get('quiz', []))} questions")
-        
-        # Show first timestamp
-        if lesson.get('timestamps'):
-            print(f"\n⏱️  First Timestamp:")
-            ts = lesson['timestamps'][0]
-            print(f"   {ts.get('time', 'N/A')} - {ts.get('description', 'N/A')}")
-        
-        return True
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-
-def test_reading_lesson():
-    """Test reading lesson generation"""
-    print_separator("TEST 3: READING LESSON GENERATION")
-    
-    service = LessonGenerationService()
-    profile = TestUserProfile(learning_style='reading')
-    
-    print("📚 Generating reading lesson: React Hooks...")
-    print(f"   Learning Style: {profile.learning_style}")
-    print(f"   Will generate long-form content + diagrams\n")
-    
-    try:
-        request = LessonRequest(
-            step_title="React Hooks",
-            lesson_number=1,
-            learning_style="reading",
-            user_profile=profile,
-            difficulty='beginner',
-            industry=profile.industry
-        )
-        lesson = service.generate_lesson(request)
-        
-        print("✅ Lesson generated successfully!")
-        print(f"   Type: {lesson['type']}")
-        print(f"   Content Length: {len(lesson.get('content', ''))} characters")
-        print(f"   Diagrams: {len(lesson.get('diagrams', []))} diagrams")
-        print(f"   Hero Image: {lesson.get('hero_image', 'N/A')}")
-        print(f"   Quiz Questions: {len(lesson.get('quiz', []))} questions")
-        
-        # Show first diagram
-        if lesson.get('diagrams'):
-            print(f"\n📊 First Diagram:")
-            diag = lesson['diagrams'][0]
-            print(f"   Title: {diag.get('title', 'N/A')}")
-            print(f"   Mermaid Code: {len(diag.get('mermaid_code', ''))} characters")
-        
-        return True
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-
-def test_mixed_lesson():
-    """Test mixed lesson generation"""
-    print_separator("TEST 4: MIXED LESSON GENERATION")
-    
-    service = LessonGenerationService()
-    profile = TestUserProfile(learning_style='mixed')
-    
-    print("🎨 Generating mixed lesson: SQL Basics...")
-    print(f"   Learning Style: {profile.learning_style}")
-    print(f"   Will combine text + video + exercises + diagrams\n")
-    
-    try:
-        request = LessonRequest(
-            step_title="SQL Basics",
-            lesson_number=1,
-            learning_style="mixed",
-            user_profile=profile,
-            difficulty='beginner',
-            industry=profile.industry
-        )
-        lesson = service.generate_lesson(request)
-        
-        print("✅ Lesson generated successfully!")
-        print(f"   Type: {lesson['type']}")
-        print(f"   Text Content: {len(lesson.get('text_content', ''))} characters")
-        print(f"   Has Video: {lesson.get('video', 'N/A') != 'N/A'}")
-        print(f"   Exercises: {len(lesson.get('exercises', []))} exercises")
-        print(f"   Diagrams: {len(lesson.get('diagrams', []))} diagrams")
-        print(f"   Quiz Questions: {len(lesson.get('quiz', []))} questions")
-        
-        return True
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-
-def main():
-    """Run all tests"""
-    print("\n" + "🚀" * 40)
-    print("  LESSON GENERATION SERVICE - COMPREHENSIVE TEST")
-    print("🚀" * 40)
-    
-    # Check API keys
-    print("\n📋 Checking API Keys...")
-    gemini_key = os.getenv('GEMINI_API_KEY')
-    youtube_key = os.getenv('YOUTUBE_API_KEY')
-    unsplash_key = os.getenv('UNSPLASH_ACCESS_KEY')
-    groq_key = os.getenv('GROQ_API_KEY')
-    
-    print(f"   ✅ Gemini API: {'Configured' if gemini_key else '❌ MISSING'}")
-    print(f"   {'✅' if youtube_key else '⚠️ '} YouTube API: {'Configured' if youtube_key else 'Not configured (optional)'}")
-    print(f"   {'✅' if unsplash_key else '⚠️ '} Unsplash API: {'Configured' if unsplash_key else 'Not configured (optional)'}")
-    print(f"   {'✅' if groq_key else '⚠️ '} Groq API: {'Configured' if groq_key else 'Not configured (Whisper fallback unavailable)'}")
-    
-    if not gemini_key:
-        print("\n❌ ERROR: GEMINI_API_KEY not found in .env file!")
-        print("   Please add it to continue.")
-        return
-    
-    # Run tests
-    results = {
-        'hands_on': test_hands_on_lesson(),
-        'video': test_video_lesson(),
-        'reading': test_reading_lesson(),
-        'mixed': test_mixed_lesson(),
+    # Minimal user profile for testing
+    user_profile = {
+        'time_commitment': '3-5',
+        'learning_pace': 'moderate',
+        'current_experience_level': 'beginner',
+        'role': 'student',
+        'goals': [
+            {'skill_name': 'Python', 'target_skill_level': 'intermediate'},
+        ]
     }
-    
-    # Summary
-    print_separator("TEST SUMMARY")
-    
-    total = len(results)
-    passed = sum(results.values())
-    failed = total - passed
-    
-    print(f"Total Tests: {total}")
-    print(f"✅ Passed: {passed}")
-    print(f"❌ Failed: {failed}")
-    print(f"\nSuccess Rate: {(passed/total)*100:.1f}%")
-    
-    for style, result in results.items():
-        status = "✅ PASS" if result else "❌ FAIL"
-        print(f"   {status} - {style.replace('_', ' ').title()} Lesson")
-    
-    print("\n" + "=" * 80 + "\n")
-    
-    if failed == 0:
-        print("🎉 ALL TESTS PASSED! Lesson generation service is working perfectly.")
-    else:
-        print("⚠️  Some tests failed. Check the errors above for details.")
+
+    # Test data for each learning style
+    test_cases = [
+        {
+            'learning_style': 'hands_on',
+            'title': 'Python Variables and Data Types',
+            'description': 'Hands-on lesson with coding exercises'
+        },
+        {
+            'learning_style': 'video',
+            'title': 'Introduction to Functions',
+            'description': 'Video lesson with study guide'
+        },
+        {
+            'learning_style': 'reading',
+            'title': 'Control Flow and Loops',
+            'description': 'Reading lesson with diagrams'
+        },
+        {
+            'learning_style': 'mixed',
+            'title': 'Working with Lists',
+            'description': 'Mixed lesson with text, exercises, and visuals'
+        }
+    ]
+
+    results = {
+        'test_date': datetime.now().isoformat(),
+        'total_tests': len(test_cases),
+        'passed': 0,
+        'failed': 0,
+        'results': []
+    }
+
+    try:
+        for i, test_case in enumerate(test_cases, 1):
+            logger.info("")
+            logger.info(f"TEST {i}/{len(test_cases)}: {test_case['learning_style'].upper()}")
+            logger.info(f"Topic: {test_case['title']}")
+            logger.info("-" * 80)
+
+            try:
+                # Create request
+                request = LessonRequest(
+                    step_title=test_case['title'],
+                    lesson_number=1,
+                    learning_style=test_case['learning_style'],
+                    user_profile=user_profile,
+                    difficulty='beginner',
+                    industry='Technology',
+                    category='python',
+                    programming_language='python',
+                    enable_research=False  # Disable research for faster testing
+                )
+
+                # Generate lesson
+                logger.info(f"Generating {test_case['learning_style']} lesson...")
+                lesson = await service.generate_lesson(request)
+
+                if not lesson:
+                    raise Exception("Lesson generation returned None")
+
+                # Validate basic structure
+                if not isinstance(lesson, dict):
+                    raise Exception(f"Lesson must be dict, got {type(lesson)}")
+
+                if 'type' not in lesson and 'lesson_type' not in lesson:
+                    raise Exception("Lesson missing 'type' or 'lesson_type' field")
+
+                # Check for required fields
+                required_fields = ['title', 'summary']
+                for field in required_fields:
+                    if field not in lesson:
+                        logger.warning(f"  Warning: Missing field: {field}")
+
+                # Log success
+                lesson_type = lesson.get('type') or lesson.get('lesson_type')
+                logger.info(f"✅ SUCCESS: {test_case['learning_style']}")
+                logger.info(f"   Type: {lesson_type}")
+                logger.info(f"   Title: {lesson.get('title', 'N/A')}")
+                logger.info(f"   Fields: {', '.join(list(lesson.keys())[:5])}...")
+
+                results['results'].append({
+                    'learning_style': test_case['learning_style'],
+                    'status': 'PASSED',
+                    'title': lesson.get('title', 'N/A'),
+                    'error': None
+                })
+                results['passed'] += 1
+
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"❌ FAILED: {test_case['learning_style']}")
+                logger.error(f"   Error: {error_msg}")
+
+                results['results'].append({
+                    'learning_style': test_case['learning_style'],
+                    'status': 'FAILED',
+                    'title': test_case['title'],
+                    'error': error_msg
+                })
+                results['failed'] += 1
+
+        # Cleanup
+        logger.info("")
+        logger.info("Cleaning up resources...")
+        await service.cleanup()
+
+    except Exception as e:
+        logger.error(f"FATAL ERROR: {e}")
+        results['fatal_error'] = str(e)
+        raise
+
+    finally:
+        # Print summary
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("TEST SUMMARY")
+        logger.info("=" * 80)
+        logger.info(f"Total Tests: {results['total_tests']}")
+        logger.info(f"Passed: {results['passed']}")
+        logger.info(f"Failed: {results['failed']}")
+
+        if results['failed'] == 0:
+            logger.info("")
+            logger.info("All tests passed!")
+        else:
+            logger.info("")
+            logger.info("Some tests failed - see details above")
+
+        logger.info("=" * 80)
 
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(test_all_learning_styles())

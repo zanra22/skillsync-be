@@ -31,6 +31,9 @@ from dataclasses import dataclass
 # Import research engine
 from .multi_source_research import multi_source_research_engine
 
+# Import YouTube service module
+from .youtube import YouTubeService, VideoAnalyzer
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -69,7 +72,12 @@ class LessonGenerationService:
         # Multi-source research engine
         self.research_engine = multi_source_research_engine
         logger.info("🔬 Multi-source research engine initialized")
-        
+
+        # YouTube service with quality ranking and transcript fallback
+        self.youtube_service = YouTubeService(self.youtube_api_key, self.groq_api_key)
+        self.video_analyzer = VideoAnalyzer()
+        logger.info("🎥 YouTube service initialized with quality ranking")
+
         # API URLs - Use Gemini 2.0 Flash Experimental (stable, free tier)
         # Free tier: 15 RPM, 200 RPD (better RPM than 2.5 Flash which has 10 RPM)
         # Stick with 2.0 for now - higher RPM is critical for our fallback system
@@ -837,12 +845,12 @@ class LessonGenerationService:
         logger.info(f"🛠️ Generating hands-on lesson for: {request.step_title}")
         
         prompt = self._create_hands_on_prompt(request, research_data)
-        
+
         # Call Gemini API
         response = self._call_gemini_api(prompt)
-        
+
         if not response:
-            return self._generate_fallback_lesson(request)
+            return await self._generate_fallback_lesson(request)
         
         # Parse AI response
         lesson_data = self._parse_hands_on_response(response, request)
@@ -1047,20 +1055,15 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
         """
         logger.info(f"🎥 Generating video lesson for: {request.step_title}")
         
-        # Step 1: Search YouTube
-        video_data = self._search_youtube_video(request.step_title)
-        
+        # Step 1: Search YouTube with quality ranking
+        video_data = self.youtube_service.search_and_rank(request.step_title)
+
         if not video_data:
             logger.warning(f"⚠️ No YouTube video found for: {request.step_title}")
-            return self._generate_fallback_lesson(request)
+            return await self._generate_fallback_lesson(request)
         
-        # Step 2: Fetch transcript (try YouTube captions first)
-        transcript = self._get_youtube_transcript(video_data['video_id'])
-        
-        # Step 2b: Fallback to Groq Whisper if YouTube captions unavailable
-        if not transcript and self.groq_api_key:
-            logger.info("⏩ YouTube captions unavailable - using Groq Whisper fallback...")
-            transcript = self._transcribe_with_groq(video_data['video_id'])
+        # Step 2: Fetch transcript (with YouTube captions + Groq fallback)
+        transcript = self.youtube_service.get_transcript(video_data['video_id'])
         
         if not transcript:
             logger.warning(f"⚠️ No transcript available (tried YouTube + Groq): {video_data['video_id']}")
@@ -1089,7 +1092,14 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
             return lesson_data
         
         # Step 3: Gemini analyzes transcript (WITH RESEARCH CONTEXT!)
-        analysis = self._analyze_video_transcript(transcript, request, research_data)
+        # Pass the AI call function to the analyzer
+        analysis = self.video_analyzer.analyze_transcript(
+            transcript=transcript,
+            topic=request.step_title,
+            user_profile=request.user_profile,
+            research_context=research_data,
+            ai_call_func=self._call_gemini_api
+        )
         
         # Step 4: Combine video + analysis
         lesson_data = {
@@ -1137,450 +1147,14 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
         
         return lesson_data
     
-    def _search_youtube_video(self, topic: str) -> Optional[Dict]:
-        """
-        Search YouTube for best tutorial video WITH CAPTIONS.
-        Prioritizes videos with closed captions available.
-        Returns video metadata.
-        """
-        if not self.youtube_api_key:
-            logger.error("❌ YouTube API key not configured")
-            return None
-        
-        try:
-            from googleapiclient.discovery import build
-            
-            youtube = build('youtube', 'v3', developerKey=self.youtube_api_key)
-            
-            # Search for video
-            search_query = f"{topic} tutorial programming"
-            logger.info(f"🔍 Searching YouTube: {search_query}")
-            
-            search_response = youtube.search().list(
-                q=search_query,
-                part='snippet',
-                type='video',
-                maxResults=10,  # Get more results to find one with captions
-                order='relevance',
-                videoDuration='medium',  # 4-20 minutes
-                videoDefinition='high',
-                videoCaption='closedCaption',  # 🔥 ONLY videos with captions!
-                relevanceLanguage='en'
-            ).execute()
-            
-            if not search_response.get('items'):
-                logger.warning("⚠️ No videos with captions found, trying without caption filter...")
-                # Fallback: Try without caption requirement
-                search_response = youtube.search().list(
-                    q=search_query,
-                    part='snippet',
-                    type='video',
-                    maxResults=5,
-                    order='relevance',
-                    videoDuration='medium',
-                    videoDefinition='high',
-                    relevanceLanguage='en'
-                ).execute()
-                
-                if not search_response.get('items'):
-                    return None
-            
-            # Try each video until we find one with accessible transcript
-            for video in search_response['items']:
-                video_id = video['id']['videoId']
-                
-                # Quick check if transcript is available
-                if self._has_transcript(video_id):
-                    logger.info(f"✅ Found video with transcript: {video_id}")
-                    break
-            else:
-                # No video with transcript found, use first result
-                logger.warning("⚠️ No accessible transcripts, using first video")
-                video_id = search_response['items'][0]['id']['videoId']
-            
-            # Get video details (duration, view count, etc.)
-            video_response = youtube.videos().list(
-                id=video_id,
-                part='snippet,contentDetails,statistics'
-            ).execute()
-            
-            if not video_response.get('items'):
-                return None
-            
-            video_details = video_response['items'][0]
-            
-            # Parse duration (PT15M33S → 15.55 minutes)
-            duration_str = video_details['contentDetails']['duration']
-            duration_minutes = self._parse_youtube_duration(duration_str)
-            
-            return {
-                'video_id': video_id,
-                'title': video_details['snippet']['title'],
-                'description': video_details['snippet']['description'],
-                'channel': video_details['snippet']['channelTitle'],
-                'thumbnail_url': video_details['snippet']['thumbnails']['high']['url'],
-                'video_url': f'https://www.youtube.com/watch?v={video_id}',
-                'embed_url': f'https://www.youtube.com/embed/{video_id}',
-                'duration_minutes': duration_minutes,
-                'view_count': int(video_details['statistics'].get('viewCount', 0)),
-                'like_count': int(video_details['statistics'].get('likeCount', 0)),
-            }
-        
-        except Exception as e:
-            logger.error(f"❌ YouTube search failed: {e}")
-            return None
-    
-    def _parse_youtube_duration(self, duration_str: str) -> int:
-        """Parse ISO 8601 duration (PT15M33S) to minutes"""
-        import re
-        
-        # PT15M33S → 15 minutes
-        minutes = 0
-        hours_match = re.search(r'(\d+)H', duration_str)
-        minutes_match = re.search(r'(\d+)M', duration_str)
-        
-        if hours_match:
-            minutes += int(hours_match.group(1)) * 60
-        if minutes_match:
-            minutes += int(minutes_match.group(1))
-        
-        return minutes or 10  # Default to 10 if parsing fails
-    
-    def _has_transcript(self, video_id: str) -> bool:
-        """
-        Quick check if video has accessible transcript.
-        Actually tries to fetch first 3 entries to verify it works.
-        Returns True if transcript available, False otherwise.
-        """
-        try:
-            from youtube_transcript_api import YouTubeTranscriptApi
-            
-            # BETTER: Actually try to fetch transcript (not just list)
-            # This catches XML parsing errors before we commit to the video
-            transcript = YouTubeTranscriptApi.get_transcript(
-                video_id,
-                languages=['en', 'en-US', 'en-GB']  # English variants
-            )
-            
-            # Verify we got some data
-            return len(transcript) > 0
-        
-        except Exception as e:
-            # If any error (XML parse, not found, etc), assume no transcript
-            logger.debug(f"   No accessible transcript for {video_id}: {str(e)[:50]}")
-            return False
-    
-    def _get_youtube_transcript(self, video_id: str) -> Optional[str]:
-        """
-        Fetch YouTube video transcript/captions.
-        Uses youtube-transcript-api (FREE, no API key needed)
-        
-        With rate limiting. Only 1 attempt to avoid spam.
-        If unavailable, Groq Whisper will be used as fallback.
-        """
-        # RATE LIMITING: Prevent 429 errors from rapid requests
-        import time
-        current_time = time.time()
-        time_since_last_call = current_time - self.last_youtube_call
-        
-        if time_since_last_call < 5:
-            wait_time = 5 - time_since_last_call
-            logger.info(f"⏳ YouTube rate limiting: waiting {wait_time:.1f}s before next request...")
-            time.sleep(wait_time)
-        
-        self.last_youtube_call = time.time()
-        # DB hygiene: close any old/stale DB connections before long network I/O
-        try:
-            from django.db import close_old_connections
-            close_old_connections()
-        except Exception:
-            # Best-effort: if Django isn't available in this execution context, continue
-            logger.debug("⚠️ close_old_connections() unavailable or failed - continuing")
-        
-        try:
-            from youtube_transcript_api import YouTubeTranscriptApi
-            
-            logger.info(f"📝 Fetching transcript for video: {video_id}")
-            
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-            
-            # Combine all transcript entries
-            full_transcript = " ".join([entry['text'] for entry in transcript_list])
-            
-            logger.info(f"✅ Transcript fetched: {len(full_transcript)} characters")
-            
-            return full_transcript
-        
-        except Exception as e:
-            logger.warning(f"⚠️ YouTube transcript unavailable: {str(e)[:100]}")
-            return None
-    
-    def _transcribe_with_groq(self, video_id: str) -> Optional[str]:
-        """
-        Transcribe YouTube video using Groq Whisper API (FREE fallback).
-        Only used when YouTube captions are unavailable (~5% of videos).
-        
-        NOTE: Requires FFmpeg to be installed on the system.
-        Installation: https://www.gyan.dev/ffmpeg/builds/ or `scoop install ffmpeg`
-        
-        Groq Free Tier: 14,400 minutes/day (240 hours) - more than enough!
-        Speed: 3-5 seconds per 10-minute video
-        
-        Returns: Transcript text or None if failed
-        """
-        # DB hygiene: close any old/stale DB connections before heavy subprocess/IO work
-        try:
-            from django.db import close_old_connections
-            close_old_connections()
-        except Exception:
-            logger.debug("⚠️ close_old_connections() unavailable or failed - continuing")
-
-        if not self.groq_api_key:
-            logger.info("ℹ️  Groq transcription skipped - GROQ_API_KEY not configured (optional)")
-            return None
-        
-        try:
-            from groq import Groq
-            import tempfile
-            import subprocess
-            import shutil
-            import time
-            import json
-            import logging
-            import requests
-            import hashlib
-            import asyncio
-            from typing import Dict, List, Optional, Any
-            from dataclasses import dataclass
-            # Import research engine
-            from .multi_source_research import multi_source_research_engine
-            # Import GitHub API service for real star counts
-            from helpers.github_api import GitHubAPIService
-            
-            logger.info(f"🎙️ Transcribing video with Groq Whisper: {video_id}")
-
-            # If a full URL was passed, try to extract the real id
-            if 'youtube.com' in video_id or 'youtu.be' in video_id:
-                # try to extract v= or last path segment
-                m = re.search(r'(?:v=|youtu\.be/)([A-Za-z0-9_-]{6,20})', video_id)
-                if m:
-                    extracted = m.group(1)
-                    logger.debug(f"🔎 Extracted video id from url: {extracted}")
-                    video_id = extracted
-
-            # YouTube video ids are usually 11 chars, but be permissive
-            if not re.match(r'^[A-Za-z0-9_-]{4,20}$', str(video_id)):
-                logger.warning(f"⚠️ Invalid or missing YouTube video id: {video_id}")
-                return None
-
-            video_url = f'https://www.youtube.com/watch?v={video_id}'
-            audio_file = tempfile.mktemp(suffix='.mp3')
-            # Optional: support cookie file for age-restricted videos
-            cookies_file = os.getenv('YOUTUBE_COOKIES_FILE') or os.getenv('YT_COOKIES_FILE')
-
-            # Use NamedTemporaryFile to safely create path
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-            audio_file = tmp.name
-            tmp.close()
-
-            # Build base yt-dlp command
-            cmd = [
-                'yt-dlp',
-                '-vU',
-                '-x',  # Extract audio only
-                '--audio-format', 'mp3',
-                '--audio-quality', '5',  # Lower quality = faster download
-                '-o', audio_file,
-                '--no-playlist',
-                '--quiet',
-                video_url
-            ]
-
-            if cookies_file:
-                cmd += ['--cookies', cookies_file]
-
-            cmd += ['--quiet', video_url]
-
-            # Try downloading with retries/backoff and capture stderr for debugging
-            max_attempts = 3
-            attempt = 0
-            download_succeeded = False
-            last_err = None
-
-            while attempt < max_attempts and not download_succeeded:
-                attempt += 1
-                try:
-                    proc = subprocess.run(
-                        cmd,
-                        check=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        timeout=120
-                    )
-
-                    logger.debug(f"yt-dlp stdout: {proc.stdout[:1000]}")
-                    logger.debug(f"yt-dlp stderr: {proc.stderr[:1000]}")
-
-                    download_succeeded = True
-                except subprocess.CalledProcessError as cpe:
-                    last_err = cpe
-                    stderr = (cpe.stderr or '')[:2000]
-                    logger.warning(f"⚠️ yt-dlp failed (exit {cpe.returncode}) on attempt {attempt}: {stderr}")
-                    # If a 403 appears in stderr, it's likely restricted/blocked
-                    if '403' in stderr or 'forbidden' in stderr.lower():
-                        logger.warning("🚫 yt-dlp reported 403 Forbidden - video may be age/geo restricted or blocked")
-                        # If we haven't tried cookies yet and cookies are available, retry with cookies
-                        if not cookies_file and attempt == 1:
-                            logger.info("🔐 No cookies configured - set YOUTUBE_COOKIES_FILE to retry age-restricted videos")
-                            break
-                    # Exponential backoff before retry
-                    time.sleep(1 * attempt)
-                except subprocess.TimeoutExpired as te:
-                    last_err = te
-                    logger.warning(f"⚠️ yt-dlp timeout on attempt {attempt}")
-                    time.sleep(1 * attempt)
-                except FileNotFoundError:
-                    logger.warning("⚠️ yt-dlp not installed - Groq transcription unavailable")
-                    logger.info("💡 Install: pip install yt-dlp (but FFmpeg still required)")
-                    # Cleanup tmp file
-                    try:
-                        if os.path.exists(audio_file):
-                            os.remove(audio_file)
-                    except Exception:
-                        pass
-                    return None
-
-            if not download_succeeded:
-                logger.error(f"❌ Failed to download audio after {max_attempts} attempts: {last_err}")
-                # Cleanup tmp file
-                try:
-                    if os.path.exists(audio_file):
-                        os.remove(audio_file)
-                except Exception:
-                    pass
-                return None
-            
-            # 2. Transcribe with Groq Whisper
-            try:
-                client = Groq(api_key=self.groq_api_key)
-                with open(audio_file, 'rb') as f:
-                    transcription = client.audio.transcriptions.create(
-                        file=f,
-                        model="whisper-large-v3",  # Best accuracy
-                        response_format="text",
-                        language="en"
-                    )
-
-                logger.info(f"✅ Groq transcription complete: {len(transcription)} characters")
-                return transcription
-            except Exception as e:
-                logger.error(f"❌ Groq transcription API error: {str(e)[:200]}")
-                return None
-            finally:
-                # 3. Cleanup
-                try:
-                    if os.path.exists(audio_file):
-                        os.remove(audio_file)
-                except Exception:
-                    logger.debug("⚠️ Failed to remove temp audio file")
-
-        except Exception as e:
-            logger.error(f"❌ Groq transcription failed: {str(e)[:200]}")
-            return None
-    
-    def _analyze_video_transcript(self, transcript: str, request: LessonRequest, research_data: Optional[Dict] = None) -> Dict:
-        """
-        Use Gemini to analyze video transcript and generate study materials.
-        Now includes research context for verification!
-        """
-        # Build research context section if available
-        research_context = ""
-        if research_data:
-            research_context = f"""
-
-**📚 VERIFIED RESEARCH CONTEXT (Cross-reference video content with this!):**
-
-{self.research_engine.format_for_ai_prompt(research_data)}
-
-**CRITICAL: Verify video content against research above. Flag any discrepancies. Add missing best practices.**
-"""
-        
-        # Build user profile context
-        profile_context = self._build_profile_context(request.user_profile)
-        profile_section = ""
-        if profile_context:
-            profile_section = f"""
-
-**LEARNER PROFILE:**
-{profile_context}
-**IMPORTANT: Tailor study guide and examples to align with the learner's role, career stage, and goals above.**
-"""
-        
-        prompt = f"""You are analyzing a YouTube tutorial video transcript about: "{request.step_title}".
-        
-**LEARNER CONTEXT:**
-- Time Commitment: {self._get_time_guidance(request.user_profile)}
-- Create materials appropriate for {self._get_time_guidance(request.user_profile)}
-{profile_section}
-**VIDEO TRANSCRIPT:**
-{transcript[:8000]}  
-{f"... (truncated, total length: {len(transcript)} chars)" if len(transcript) > 8000 else ""}
-{research_context}
-**YOUR TASK:**
-Generate structured study materials from this video. Use the research context to verify accuracy and add any missing information.
-
-**OUTPUT FORMAT (STRICT JSON):**
-```json
-{{
-  "summary": "3-4 sentence summary of what the video teaches",
-  "key_concepts": [
-    "Main concept 1",
-    "Main concept 2",
-    "Main concept 3"
-  ],
-  "timestamps": [
-    {{
-      "time": "2:34",
-      "description": "Explains function parameters"
-    }},
-    // 5-10 key moments
-  ],
-  "study_guide": "Detailed notes covering:\n- Topic 1: Explanation\n- Topic 2: Explanation\n...",
-  "quiz": [
-    {{
-      "question": "Based on the video, what is...",
-      "options": ["A", "B", "C", "D"],
-      "correct_answer": "B",
-      "explanation": "The video explains at 3:45..."
-    }}
-    // 5-7 questions
-  ]
-}}
-```
-
-Generate the analysis now."""
-        
-        response = self._call_gemini_api(prompt)
-        
-        if not response:
-            return {}
-        
-        try:
-            # Parse JSON response
-            if '```json' in response:
-                start = response.find('```json') + 7
-                end = response.find('```', start)
-                json_str = response[start:end].strip()
-            else:
-                json_str = response.strip()
-            
-            analysis = json.loads(json_str)
-            return analysis
-        
-        except Exception as e:
-            logger.error(f"❌ Failed to parse video analysis: {e}")
-            return {}
+    # YouTube service methods have been moved to helpers.youtube module
+    # Classes involved:
+    # - YouTubeService: Video search with quality ranking
+    # - TranscriptService: YouTube transcript + Groq fallback
+    # - GroqTranscription: Groq Whisper API wrapper
+    # - VideoAnalyzer: Transcript analysis and study guide generation
+    #
+    # These methods are now called via: self.youtube_service and self.video_analyzer
     
     # ========================================
     # READING LESSONS (Long-form text + diagrams)
@@ -1604,7 +1178,7 @@ Generate the analysis now."""
         # Call Gemini API
         response = self._call_gemini_api(prompt)
         if not response:
-            return self._generate_fallback_lesson(request)
+            return await self._generate_fallback_lesson(request)
         # Parse response
         lesson_data = self._parse_reading_response(response, request)
 
@@ -2025,17 +1599,12 @@ Output only the description text, no quotes or extra formatting.'''.format(
         text_content = self._parse_mixed_text(text_response) if text_response else {}
         
         # 2. Video component (with optional transcript analysis)
-        video_data = self._search_youtube_video(request.step_title)
-        
+        video_data = self.youtube_service.search_and_rank(request.step_title)
+
         # 2b. Try to get transcript for video analysis (YouTube or Groq fallback)
         video_analysis = {}
         if video_data:
-            transcript = self._get_youtube_transcript(video_data['video_id'])
-            
-            # Fallback to Groq Whisper if YouTube captions unavailable
-            if not transcript and self.groq_api_key:
-                logger.info("⏩ YouTube captions unavailable - using Groq Whisper fallback...")
-                transcript = self._transcribe_with_groq(video_data['video_id'])
+            transcript = self.youtube_service.get_transcript(video_data['video_id'])
             
             # If we got transcript, do light analysis for mixed lesson
             if transcript:
