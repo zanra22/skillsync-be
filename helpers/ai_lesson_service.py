@@ -1862,3 +1862,79 @@ Generate for: {request.step_title}"""
         except Exception as e:
             logger.error(f"❌ Failed to parse mixed exercises: {e}")
             return []
+
+    async def generate_lessons_for_module(self, module, user_profile: Optional[Dict] = None) -> int:
+        """
+        Generate all lessons for a module (3-5 lessons by default).
+        Called directly from Django mutation when Azure Function provides request key.
+
+        Args:
+            module: Module object with id, title, difficulty, etc.
+            user_profile: User's onboarding profile (optional)
+
+        Returns:
+            Number of lessons created
+        """
+        from asgiref.sync import sync_to_async
+        from lessons.models import LessonContent
+
+        logger.info(f"🚀 [Module] Generating lessons for module: {module.title}")
+
+        try:
+            # Determine number of lessons based on module difficulty
+            lesson_counts = {
+                'beginner': 5,
+                'intermediate': 5,
+                'advanced': 4
+            }
+            num_lessons = lesson_counts.get(module.difficulty, 5)
+            logger.info(f"📚 Generating {num_lessons} lessons for {module.difficulty} module")
+
+            lessons_created = 0
+
+            # Generate lessons (3-5 depending on complexity)
+            for lesson_num in range(1, num_lessons + 1):
+                try:
+                    # Determine learning style (rotate through styles)
+                    styles = ['hands_on', 'video', 'reading', 'mixed']
+                    learning_style = styles[(lesson_num - 1) % len(styles)]
+
+                    # Create lesson request
+                    lesson_request = LessonRequest(
+                        step_title=module.title,
+                        lesson_number=lesson_num,
+                        learning_style=learning_style,
+                        user_profile=user_profile or {},
+                        difficulty=module.difficulty,
+                        category=getattr(module, 'category', None),
+                        enable_research=True
+                    )
+
+                    # Generate lesson
+                    logger.info(f"  📝 Generating lesson {lesson_num}/{num_lessons} ({learning_style})")
+                    lesson_data = await self.generate_lesson(lesson_request)
+
+                    # Save to database
+                    lesson_content = await sync_to_async(LessonContent.objects.create)(
+                        module=module,
+                        lesson_number=lesson_num,
+                        content=lesson_data.get('content', {}),
+                        learning_style=learning_style,
+                        difficulty=module.difficulty,
+                        source_type='ai_only',
+                        source_attribution=lesson_data.get('source_attribution', {})
+                    )
+                    logger.info(f"  ✅ Lesson {lesson_num} created: {lesson_content.id}")
+                    lessons_created += 1
+
+                except Exception as lesson_error:
+                    logger.warning(f"  ⚠️ Failed to generate lesson {lesson_num}: {lesson_error}")
+                    # Continue with next lesson even if one fails
+                    continue
+
+            logger.info(f"✅ Successfully created {lessons_created}/{num_lessons} lessons")
+            return lessons_created
+
+        except Exception as e:
+            logger.error(f"❌ Failed to generate lessons for module: {e}", exc_info=True)
+            raise

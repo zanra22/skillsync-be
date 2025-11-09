@@ -646,54 +646,137 @@ class LessonsMutation:
             logger.info(f"🚀 On-demand generation requested for module: {module.title}")
 
             # ============================================
-            # STEP 1: Generate unique one-time request key
+            # CRITICAL LOGIC SPLIT
             # ============================================
-            request_key = secrets.token_urlsafe(32)
-            logger.info(f"🔑 Generated request key for secure authentication")
+            # Two different flows based on request source:
+            #
+            # FLOW 1: Regular user request (no request key in headers)
+            #   - Frontend calls mutation with JWT auth
+            #   - Generate request key
+            #   - Enqueue to Azure Service Bus
+            #   - Return immediately (async processing)
+            #   - Azure Function picks up message and calls back with request key
+            #
+            # FLOW 2: Azure Function request (has request key in headers)
+            #   - Azure Function already validated request key
+            #   - Skip enqueue (prevents duplicate work)
+            #   - Directly generate lessons synchronously
+            #   - Update module status to completed
+            #   - Return generated module
 
-            # Save key to database (will be deleted after validation)
-            # Use verified_user_id (from either auth or headers) instead of user.id
-            # This ensures the key matches the user who triggered the request
-            await sync_to_async(LessonGenerationRequest.objects.create)(
-                module_id=module_id,
-                user_id=verified_user_id,  # ← Use verified_user_id, not user.id
-                request_key=request_key
-            )
-            logger.debug(f"   Key stored in database for validation")
+            if request_key_from_headers:
+                # ============================================
+                # FLOW 2: Azure Function Callback (Direct Generation)
+                # ============================================
+                logger.info(f"🚀 [Azure] Direct lesson generation (request key validated)")
 
-            # Get user profile for personalization
-            user_profile = None
-            try:
-                # Use sync_to_async to check profile in async context
-                has_profile = await sync_to_async(lambda: hasattr(user, 'profile'))()
-                if has_profile:
-                    user_profile = await sync_to_async(lambda: user.profile)()
-            except Exception as profile_error:
-                logger.debug(f"Could not load user profile: {profile_error}")
-                pass
+                # Import here to avoid circular dependency
+                from helpers.ai_lesson_service import LessonGenerationService
 
-            # Import here to avoid circular dependency
-            from helpers.ai_roadmap_service import HybridRoadmapService
+                try:
+                    # Update status to in_progress
+                    module.generation_status = 'in_progress'
+                    module.generation_started_at = timezone.now()
+                    await module.asave()
+                    logger.info(f"✅ Module status updated to 'in_progress'")
 
-            # ============================================
-            # STEP 2: Enqueue for generation via Azure Service Bus
-            # ============================================
-            roadmap_service = HybridRoadmapService()
-            try:
-                await roadmap_service.enqueue_module_for_generation(
-                    module,
-                    user_profile,
-                    request_key=request_key  # ← Include key in message
+                    # Get user profile for personalization
+                    user_profile = None
+                    try:
+                        # Get the actual user object from verified_user_id
+                        from django.contrib.auth import get_user_model
+                        User = get_user_model()
+                        actual_user = await User.objects.aget(id=verified_user_id)
+                        if hasattr(actual_user, 'profile'):
+                            user_profile = await sync_to_async(lambda: actual_user.profile)()
+                    except Exception as profile_error:
+                        logger.debug(f"Could not load user profile: {profile_error}")
+                        pass
+
+                    # Directly generate lessons
+                    lesson_service = LessonGenerationService()
+                    try:
+                        lesson_count = await lesson_service.generate_lessons_for_module(
+                            module=module,
+                            user_profile=user_profile
+                        )
+                        logger.info(f"✅ Generated {lesson_count} lessons for module")
+
+                        # Update status to completed
+                        module.generation_status = 'completed'
+                        module.generation_completed_at = timezone.now()
+                        module.generation_error = None
+                        await module.asave()
+                        logger.info(f"✅ Module status updated to 'completed'")
+
+                    finally:
+                        await lesson_service.cleanup()
+
+                except Exception as generation_error:
+                    logger.error(f"❌ Direct lesson generation failed: {generation_error}", exc_info=True)
+                    module.generation_status = 'failed'
+                    module.generation_error = str(generation_error)[:500]
+                    module.generation_completed_at = timezone.now()
+                    await module.asave()
+                    raise Exception(f"Lesson generation failed: {str(generation_error)}")
+
+                # Refresh and return
+                await module.arefresh_from_db()
+                return module
+
+            else:
+                # ============================================
+                # FLOW 1: Regular User Request (Queue for Azure)
+                # ============================================
+                logger.info(f"📋 [Frontend] Queueing module for async generation")
+
+                # Generate unique one-time request key
+                request_key = secrets.token_urlsafe(32)
+                logger.info(f"🔑 Generated request key for secure authentication")
+
+                # Save key to database (will be deleted after validation)
+                # Use verified_user_id (from either auth or headers) instead of user.id
+                # This ensures the key matches the user who triggered the request
+                await sync_to_async(LessonGenerationRequest.objects.create)(
+                    module_id=module_id,
+                    user_id=verified_user_id,  # ← Use verified_user_id, not user.id
+                    request_key=request_key
                 )
-                logger.info(f"✅ Module queued for generation: {module.title}")
-            finally:
-                # Cleanup async resources (critical on Windows)
-                await roadmap_service.cleanup()
+                logger.debug(f"   Key stored in database for validation")
 
-            # Refresh module to get updated status
-            await module.arefresh_from_db()
+                # Get user profile for personalization
+                user_profile = None
+                try:
+                    # Use sync_to_async to check profile in async context
+                    has_profile = await sync_to_async(lambda: hasattr(user, 'profile'))()
+                    if has_profile:
+                        user_profile = await sync_to_async(lambda: user.profile)()
+                except Exception as profile_error:
+                    logger.debug(f"Could not load user profile: {profile_error}")
+                    pass
 
-            return module
+                # Import here to avoid circular dependency
+                from helpers.ai_roadmap_service import HybridRoadmapService
+
+                # ============================================
+                # STEP 2: Enqueue for generation via Azure Service Bus
+                # ============================================
+                roadmap_service = HybridRoadmapService()
+                try:
+                    await roadmap_service.enqueue_module_for_generation(
+                        module,
+                        user_profile,
+                        request_key=request_key  # ← Include key in message
+                    )
+                    logger.info(f"✅ Module queued for generation: {module.title}")
+                finally:
+                    # Cleanup async resources (critical on Windows)
+                    await roadmap_service.cleanup()
+
+                # Refresh module to get updated status
+                await module.arefresh_from_db()
+
+                return module
 
         except Exception as e:
             logger.error(f"❌ Failed to generate module lessons: {e}", exc_info=True)
