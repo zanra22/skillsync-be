@@ -652,9 +652,11 @@ class LessonsMutation:
             logger.info(f"🔑 Generated request key for secure authentication")
 
             # Save key to database (will be deleted after validation)
+            # Use verified_user_id (from either auth or headers) instead of user.id
+            # This ensures the key matches the user who triggered the request
             await sync_to_async(LessonGenerationRequest.objects.create)(
                 module_id=module_id,
-                user_id=str(user.id),
+                user_id=verified_user_id,  # ← Use verified_user_id, not user.id
                 request_key=request_key
             )
             logger.debug(f"   Key stored in database for validation")
