@@ -20,58 +20,68 @@ print(f"Production DATABASES: {DATABASES}")
 
 # Azure Key Vault - Read YouTube Service Account Credentials
 # Reads the service account JSON from Azure Key Vault for YouTube OAuth2 authentication
+YOUTUBE_SERVICE_ACCOUNT = None
+
 try:
-    from azure.identity import DefaultAzureCredential
-    from azure.keyvault.secrets import SecretClient
-    import json
+    try:
+        from azure.identity import DefaultAzureCredential
+        from azure.keyvault.secrets import SecretClient
+        import json
 
-    KEYVAULT_URL = os.getenv('AZURE_KEYVAULT_URL')
-    print(f"[DEBUG] AZURE_KEYVAULT_URL env var: {KEYVAULT_URL}")
+        KEYVAULT_URL = os.getenv('AZURE_KEYVAULT_URL')
+        print(f"[DEBUG] AZURE_KEYVAULT_URL env var: {KEYVAULT_URL}", flush=True)
 
-    if KEYVAULT_URL:
-        try:
-            print("[DEBUG] Attempting to create DefaultAzureCredential...")
-            credential = DefaultAzureCredential()
-            print("[DEBUG] Creating SecretClient...")
-            secret_client = SecretClient(vault_url=KEYVAULT_URL, credential=credential)
+        if KEYVAULT_URL:
+            try:
+                print("[DEBUG] Attempting to create DefaultAzureCredential...", flush=True)
+                credential = DefaultAzureCredential()
+                print("[DEBUG] Creating SecretClient...", flush=True)
+                secret_client = SecretClient(vault_url=KEYVAULT_URL, credential=credential)
 
-            # Retrieve YouTube service account JSON from Key Vault
-            print("[DEBUG] Retrieving 'youtube-service-account-json' secret from Key Vault...")
-            youtube_secret = secret_client.get_secret("youtube-service-account-json")
-            if youtube_secret:
-                # The secret contains the JSON content as a string
-                secret_value = youtube_secret.value
-                print(f"[DEBUG] Secret value (first 100 chars): {secret_value[:100]}")
+                # Retrieve YouTube service account JSON from Key Vault
+                print("[DEBUG] Retrieving 'youtube-service-account-json' secret from Key Vault...", flush=True)
+                youtube_secret = secret_client.get_secret("youtube-service-account-json")
+                if youtube_secret:
+                    # The secret contains the JSON content as a string
+                    secret_value = youtube_secret.value
+                    print(f"[DEBUG] Secret value (first 100 chars): {secret_value[:100]}", flush=True)
 
-                # Handle potential escaping issues
-                try:
-                    YOUTUBE_SERVICE_ACCOUNT = json.loads(secret_value)
-                    print("[OK] Loaded YouTube service account from Azure Key Vault")
-                except json.JSONDecodeError as json_err:
-                    # Try unescaping if it's been double-escaped
+                    # Handle potential escaping issues
                     try:
-                        print(f"[DEBUG] JSON parse failed: {json_err}, attempting to unescape...")
-                        unescaped = secret_value.encode().decode('unicode_escape')
-                        YOUTUBE_SERVICE_ACCOUNT = json.loads(unescaped)
-                        print("[OK] Loaded YouTube service account from Azure Key Vault (after unescaping)")
-                    except Exception as e2:
-                        print(f"[WARN] Failed to parse even after unescaping: {e2}")
-                        YOUTUBE_SERVICE_ACCOUNT = None
-            else:
-                print("[WARN] youtube-service-account-json not found in Key Vault")
+                        YOUTUBE_SERVICE_ACCOUNT = json.loads(secret_value)
+                        print("[OK] Loaded YouTube service account from Azure Key Vault", flush=True)
+                    except json.JSONDecodeError as json_err:
+                        # Try unescaping if it's been double-escaped
+                        try:
+                            print(f"[DEBUG] JSON parse failed: {json_err}, attempting to unescape...", flush=True)
+                            unescaped = secret_value.encode().decode('unicode_escape')
+                            YOUTUBE_SERVICE_ACCOUNT = json.loads(unescaped)
+                            print("[OK] Loaded YouTube service account from Azure Key Vault (after unescaping)", flush=True)
+                        except Exception as e2:
+                            print(f"[WARN] Failed to parse even after unescaping: {e2}", flush=True)
+                            YOUTUBE_SERVICE_ACCOUNT = None
+                else:
+                    print("[WARN] youtube-service-account-json not found in Key Vault", flush=True)
+                    YOUTUBE_SERVICE_ACCOUNT = None
+            except Exception as e:
+                print(f"[WARN] Failed to load YouTube service account from Key Vault: {type(e).__name__}: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
                 YOUTUBE_SERVICE_ACCOUNT = None
-        except Exception as e:
-            print(f"[WARN] Failed to load YouTube service account from Key Vault: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
+        else:
+            print("[WARN] AZURE_KEYVAULT_URL not set - YouTube service account will not be loaded from Key Vault", flush=True)
             YOUTUBE_SERVICE_ACCOUNT = None
-    else:
-        print("[WARN] AZURE_KEYVAULT_URL not set - YouTube service account will not be loaded from Key Vault")
+
+    except ImportError as e:
+        # Azure SDK not available (shouldn't happen in production)
+        print(f"[WARN] Azure SDK ImportError - YouTube service account authentication disabled: {e}", flush=True)
         YOUTUBE_SERVICE_ACCOUNT = None
 
-except ImportError as e:
-    # Azure SDK not available (shouldn't happen in production)
-    print(f"[WARN] Azure SDK ImportError - YouTube service account authentication disabled: {e}")
+except Exception as outer_e:
+    # Catch ANY exception to prevent app crash
+    print(f"[CRITICAL] Unexpected error in Key Vault initialization: {type(outer_e).__name__}: {outer_e}", flush=True)
+    import traceback
+    traceback.print_exc()
     YOUTUBE_SERVICE_ACCOUNT = None
 
 # CRITICAL FIX: Remove CORS_ALLOWED_ORIGINS from globals in production
