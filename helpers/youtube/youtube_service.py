@@ -111,14 +111,17 @@ class YouTubeService:
         Returns:
             Video metadata with quality indicators or None
         """
-        logger.info(f"[search_and_rank] CALLED with topic='{topic}', max_results={max_results}")
+        timestamp = time.time()
+        logger.info(f"[search_and_rank] CALLED at {timestamp} with topic='{topic}', max_results={max_results}")
+        print(f"[search_and_rank] CALLED at {timestamp} with topic='{topic}'", flush=True)
 
         youtube = self._get_youtube_service()
         if not youtube:
             logger.error("YouTube API not available (no credentials configured)")
             return None
 
-        logger.info(f"[search_and_rank] YouTube service initialized, proceeding with search...")
+        logger.info(f"[search_and_rank] YouTube service initialized at {timestamp}, proceeding with search...")
+        print(f"[search_and_rank] YouTube service initialized, proceeding with search...", flush=True)
 
         try:
 
@@ -143,10 +146,13 @@ class YouTubeService:
 
             # Track if caption filter search returned results
             caption_filter_worked = bool(search_response.get('items'))
+            logger.info(f"[search_and_rank] Caption filter worked: {caption_filter_worked}, found {len(search_response.get('items', []))} videos")
+            print(f"[search_and_rank] Caption filter worked: {caption_filter_worked}", flush=True)
 
             # Fallback: If no captioned videos, get any relevant videos
             if not search_response.get('items'):
                 logger.warning("⚠️ No videos with captions found, trying without caption filter...")
+                print("⚠️ No videos with captions found, trying without caption filter...", flush=True)
                 search_response = youtube.search().list(
                     q=search_query,
                     part='snippet',
@@ -160,7 +166,11 @@ class YouTubeService:
 
                 if not search_response.get('items'):
                     logger.warning("⚠️ No YouTube videos found")
+                    print("⚠️ No YouTube videos found at all", flush=True)
                     return None
+
+                logger.info(f"[search_and_rank] Fallback search found {len(search_response.get('items', []))} videos")
+                print(f"[search_and_rank] Fallback search found {len(search_response.get('items', []))} videos", flush=True)
 
             # Get detailed stats for top N results
             video_ids = [item['id']['videoId'] for item in search_response['items'][:max_results]]
@@ -245,26 +255,36 @@ class YouTubeService:
                 return None
 
             # Rank videos by quality
+            logger.info(f"[search_and_rank] About to rank {len(videos_to_rank)} videos")
+            print(f"[search_and_rank] About to rank {len(videos_to_rank)} videos with topic '{topic}'", flush=True)
             ranked = self.quality_ranker.rank_videos(videos_to_rank, topic, max_results=1)
+            logger.info(f"[search_and_rank] Quality ranking returned {len(ranked) if ranked else 0} videos")
+            print(f"[search_and_rank] Quality ranking returned {len(ranked) if ranked else 0} videos", flush=True)
 
             if not ranked:
                 logger.warning("❌ No videos passed quality threshold")
+                print("❌ No videos passed quality threshold, trying Groq fallback", flush=True)
                 # Fallback: Try Groq on best available
                 if videos_to_rank:
                     best_video = videos_to_rank[0]
                     logger.warning(f"⚠️ No perfect match, trying Groq transcription on: {best_video['video_id']}")
+                    print(f"⚠️ No perfect match, trying Groq transcription on: {best_video['video_id']}", flush=True)
 
                     if self.groq_api_key and self.transcript_service.groq_transcription:
+                        print(f"[search_and_rank] Calling groq_transcription.transcribe() for {best_video['video_id']}", flush=True)
                         transcript = self.transcript_service.groq_transcription.transcribe(
                             best_video['video_id']
                         )
                         if transcript:
                             logger.info("✅ Groq transcription successful")
+                            print("✅ Groq transcription successful", flush=True)
                             return best_video
                         else:
                             logger.warning("❌ Groq transcription failed")
+                            print("❌ Groq transcription failed", flush=True)
                             return None
                     else:
+                        print("[search_and_rank] Groq not available (no API key or groq_transcription)", flush=True)
                         return None
                 return None
 
@@ -273,11 +293,13 @@ class YouTubeService:
                 f"✅ Selected video: {best_video['title'][:50]}... "
                 f"(Score: {best_video.get('quality_score', 0):.2f})"
             )
+            print(f"✅ [search_and_rank] SUCCESS: Selected video {best_video['video_id']} with score {best_video.get('quality_score', 0):.2f}", flush=True)
 
             return best_video
 
         except Exception as e:
             logger.error(f"❌ YouTube search failed: {type(e).__name__}: {e}", exc_info=True)
+            print(f"❌ [search_and_rank] EXCEPTION: {type(e).__name__}: {str(e)[:200]}", flush=True)
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             return None
