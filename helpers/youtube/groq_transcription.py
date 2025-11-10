@@ -19,7 +19,8 @@ import logging
 import tempfile
 import subprocess
 import time
-from typing import Optional
+import json
+from typing import Optional, Dict
 
 from .cookies_manager import YouTubeCookiesManager
 
@@ -41,6 +42,69 @@ def _get_yt_dlp():
     return _yt_dlp
 
 
+def _generate_oauth2_cookies(service_account_dict: dict) -> Optional[str]:
+    """
+    Generate YouTube-compatible cookies from Google service account OAuth2 credentials.
+
+    This allows yt-dlp to authenticate with YouTube using OAuth2 instead of user cookies,
+    bypassing bot detection and age-restriction errors.
+
+    Args:
+        service_account_dict: Google service account JSON dict with credentials
+
+    Returns:
+        Path to cookies file or None if generation failed
+    """
+    if not service_account_dict:
+        return None
+
+    try:
+        from google.oauth2 import service_account
+        import requests
+
+        logger.debug("[OAuth2] Generating YouTube cookies from service account...")
+
+        # Create credentials from service account
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_dict,
+            scopes=['https://www.googleapis.com/auth/youtube.readonly']
+        )
+
+        logger.debug("[OAuth2] Service account credentials created")
+
+        # Refresh credentials to get access token
+        credentials.refresh(requests.Request())
+        access_token = credentials.token
+
+        logger.debug("[OAuth2] Access token obtained, converting to Netscape cookies format...")
+
+        # Create cookies file in Netscape format (compatible with yt-dlp)
+        # This mimics browser cookies but uses OAuth2 token
+        tmp = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8')
+        cookies_file = tmp.name
+
+        # Netscape cookie format header
+        tmp.write("# Netscape HTTP Cookie File\n")
+        tmp.write("# This is a generated file!  Do not edit.\n")
+        tmp.write("\n")
+
+        # Add authentication cookie with OAuth2 token
+        # YouTube recognizes SAPISID cookie for OAuth2 authenticated requests
+        tmp.write(".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\t{}\n".format(access_token))
+
+        # Alternative: Add as Authorization header via environment
+        # (but Netscape format is more reliable with yt-dlp)
+
+        tmp.close()
+
+        logger.info(f"[OK] OAuth2 cookies generated: {cookies_file}")
+        return cookies_file
+
+    except Exception as e:
+        logger.warning(f"[WARN] Failed to generate OAuth2 cookies: {type(e).__name__}: {str(e)[:100]}")
+        return None
+
+
 class GroqTranscription:
     """
     Groq Whisper transcription service for video audio.
@@ -52,14 +116,21 @@ class GroqTranscription:
     4. Cleanup of temporary files
     """
 
-    def __init__(self, groq_api_key: Optional[str] = None):
+    def __init__(self, groq_api_key: Optional[str] = None, service_account: Optional[dict] = None):
         """
         Initialize Groq transcription service.
 
         Args:
             groq_api_key: Groq API key for Whisper access
+            service_account: Google service account dict for YouTube OAuth2 authentication
         """
         self.groq_api_key = groq_api_key
+        self.service_account = service_account
+        self.oauth2_cookies_file = None
+
+        # Generate OAuth2 cookies from service account if provided
+        if self.service_account:
+            self.oauth2_cookies_file = _generate_oauth2_cookies(self.service_account)
 
     def transcribe(self, video_id: str) -> Optional[str]:
         """
@@ -148,10 +219,18 @@ class GroqTranscription:
             audio_file = tmp.name
             tmp.close()
 
-            # Get cookies file (auto-export from browser if needed)
-            cookies_file = YouTubeCookiesManager.get_cookies_file()
-            if cookies_file:
-                logger.debug(f"📝 Using cookies for YouTube authentication: {cookies_file[:50]}...")
+            # Get cookies file - priority: OAuth2 → Browser cookies → None
+            cookies_file = None
+
+            # Priority 1: Use OAuth2 cookies generated from service account
+            if self.oauth2_cookies_file:
+                cookies_file = self.oauth2_cookies_file
+                logger.debug(f"🔐 Using OAuth2 service account cookies for YouTube authentication")
+            else:
+                # Priority 2: Fall back to browser cookies (auto-export if needed)
+                cookies_file = YouTubeCookiesManager.get_cookies_file()
+                if cookies_file:
+                    logger.debug(f"📝 Using browser cookies for YouTube authentication: {cookies_file[:50]}...")
 
             # Try using yt-dlp Python API first
             yt_dlp = _get_yt_dlp()

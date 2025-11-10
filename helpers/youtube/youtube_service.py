@@ -47,7 +47,7 @@ class YouTubeService:
         self.groq_api_key = groq_api_key
         self.service_account = service_account
         self.quality_ranker = YouTubeQualityRanker()
-        self.transcript_service = TranscriptService(api_key, groq_api_key)
+        self.transcript_service = TranscriptService(api_key, groq_api_key, service_account=service_account)
         self.last_youtube_call = 0
         self._youtube_service = None  # Lazy loaded YouTube API service
 

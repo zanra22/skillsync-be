@@ -28,17 +28,19 @@ class TranscriptService:
     2. Groq Whisper transcription (slower, but reliable)
     """
 
-    def __init__(self, youtube_api_key: str, groq_api_key: Optional[str] = None):
+    def __init__(self, youtube_api_key: str, groq_api_key: Optional[str] = None, service_account: Optional[dict] = None):
         """
         Initialize transcript service.
 
         Args:
             youtube_api_key: YouTube API key (for context)
             groq_api_key: Optional Groq API key for fallback transcription
+            service_account: Optional Google service account dict for YouTube OAuth2 authentication
         """
         self.youtube_api_key = youtube_api_key
         self.groq_api_key = groq_api_key
-        self.groq_transcription = GroqTranscription(groq_api_key) if groq_api_key else None
+        self.service_account = service_account
+        self.groq_transcription = GroqTranscription(groq_api_key, service_account=service_account) if groq_api_key else None
         self.last_youtube_call = 0
 
     def has_transcript(self, video_id: str) -> bool:
