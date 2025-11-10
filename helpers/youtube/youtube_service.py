@@ -92,7 +92,7 @@ class YouTubeService:
             logger.error(f"[X] Failed to build YouTube API service: {e}")
             return None
 
-    def search_and_rank(self, topic: str, max_results: int = 3) -> Optional[Dict]:
+    def search_and_rank(self, topic: str, max_results: int = 3, include_caption_status: bool = True) -> Optional[Dict]:
         """
         Search YouTube for best tutorial video with smart filtering.
 
@@ -239,6 +239,7 @@ class YouTubeService:
                     'like_count': int(video_details['statistics'].get('likeCount', 0)),
                     'published_at': video_details['snippet']['publishedAt'],
                     'has_transcript': has_transcript,
+                    'caption_filter_matched': caption_filter_worked,  # Track if from caption-filtered search
                     **channel_data,
                 }
 

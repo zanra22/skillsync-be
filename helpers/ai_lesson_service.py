@@ -1090,8 +1090,13 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
             logger.warning(f"⚠️ No YouTube video found for: {request.step_title}")
             return await self._generate_fallback_lesson(request)
         
-        # Step 2: Fetch transcript (with YouTube captions + Groq fallback)
-        transcript = self.youtube_service.get_transcript(video_data['video_id'])
+        # Step 2: Fetch transcript (with YouTube captions + optional Groq fallback)
+        # If video came from caption-filtered search, skip Groq fallback to avoid yt-dlp bot detection
+        skip_groq = video_data.get('caption_filter_matched', False)
+        transcript = self.youtube_service.get_transcript(
+            video_data['video_id'],
+            skip_groq_fallback=skip_groq
+        )
         
         if not transcript:
             logger.warning(f"⚠️ No transcript available (tried YouTube + Groq): {video_data['video_id']}")

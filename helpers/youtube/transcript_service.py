@@ -101,17 +101,18 @@ class TranscriptService:
             logger.debug(f"   No accessible transcript for {video_id}: {str(e)[:50]}")
             return False
 
-    def get_transcript(self, video_id: str) -> Optional[str]:
+    def get_transcript(self, video_id: str, skip_groq_fallback: bool = False) -> Optional[str]:
         """
         Fetch YouTube video transcript/captions.
 
         Uses youtube-transcript-api first (FREE, no API key needed).
-        Falls back to Groq Whisper if captions unavailable.
+        Falls back to Groq Whisper if captions unavailable (unless skip_groq_fallback=True).
 
         With rate limiting. Only 1 Groq attempt to avoid spam.
 
         Args:
             video_id: YouTube video ID
+            skip_groq_fallback: If True, don't use Groq transcription (for caption-filtered videos)
 
         Returns:
             Transcript text or None if all methods fail
@@ -138,29 +139,39 @@ class TranscriptService:
         # Try YouTube native captions first
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
-            logger.info(f"📝 Fetching transcript for video: {video_id}")
+            logger.info(f"📝 [get_transcript] Fetching transcript for video: {video_id}")
+            print(f"[get_transcript] Attempting youtube-transcript-api for {video_id}", flush=True)
 
             transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
 
             # Combine all transcript entries
             full_transcript = " ".join([entry['text'] for entry in transcript_list])
 
-            logger.info(f"✅ Transcript fetched: {len(full_transcript)} characters")
+            logger.info(f"✅ [get_transcript] Transcript fetched: {len(full_transcript)} characters")
+            print(f"[get_transcript] SUCCESS: Got {len(full_transcript)} chars from YouTube", flush=True)
 
             return full_transcript
 
         except Exception as e:
-            logger.warning(f"⚠️ YouTube transcript unavailable: {str(e)[:100]}")
+            error_msg = f"{type(e).__name__}: {str(e)[:200]}"
+            logger.warning(f"⚠️ [get_transcript] YouTube transcript unavailable: {error_msg}")
+            print(f"[get_transcript] YouTube API failed: {error_msg}", flush=True)
 
-            # Fallback to Groq Whisper
-            if self.groq_transcription:
-                logger.warning(f"🎙️ Trying Groq Whisper fallback for: {video_id}")
+            # Fallback to Groq Whisper (unless explicitly skipped)
+            if not skip_groq_fallback and self.groq_transcription:
+                logger.warning(f"🎙️ [get_transcript] Trying Groq Whisper fallback for: {video_id}")
+                print(f"[get_transcript] Attempting Groq fallback...", flush=True)
                 try:
                     groq_transcript = self.groq_transcription.transcribe(video_id)
                     if groq_transcript:
-                        logger.info(f"✅ Groq transcription successful: {len(groq_transcript)} characters")
+                        logger.info(f"✅ [get_transcript] Groq transcription successful: {len(groq_transcript)} characters")
+                        print(f"[get_transcript] Groq SUCCESS: {len(groq_transcript)} chars", flush=True)
                         return groq_transcript
                 except Exception as groq_e:
-                    logger.error(f"❌ Groq transcription also failed: {str(groq_e)[:100]}")
+                    logger.error(f"❌ [get_transcript] Groq transcription also failed: {str(groq_e)[:100]}")
+                    print(f"[get_transcript] Groq FAILED: {type(groq_e).__name__}", flush=True)
+            elif skip_groq_fallback:
+                logger.info(f"ℹ️ [get_transcript] Skipping Groq fallback (caption_filter_matched=True)")
+                print(f"[get_transcript] Skipping Groq - relying on caption filter match", flush=True)
 
             return None
