@@ -254,11 +254,15 @@ class GroqTranscription:
             # Priority 1: Use OAuth2 cookies generated from service account
             if self.oauth2_cookies_file:
                 cookies_file = self.oauth2_cookies_file
+                print(f"[yt-dlp] Using OAuth2 cookies file: {cookies_file}", flush=True)
                 logger.debug(f"🔐 Using OAuth2 service account cookies for YouTube authentication")
+                logger.debug(f"🔐 Cookies file path: {cookies_file}")
             else:
                 # Priority 2: Fall back to browser cookies (auto-export if needed)
+                print(f"[yt-dlp] No OAuth2 cookies, trying browser cookies...", flush=True)
                 cookies_file = YouTubeCookiesManager.get_cookies_file()
                 if cookies_file:
+                    print(f"[yt-dlp] Using browser cookies: {cookies_file}", flush=True)
                     logger.debug(f"📝 Using browser cookies for YouTube authentication: {cookies_file[:50]}...")
 
             # Try using yt-dlp Python API first
@@ -300,6 +304,7 @@ class GroqTranscription:
                     logger.debug(f"yt-dlp Python API failed: {error_msg}, falling back to subprocess")
 
             # Fallback to subprocess mode
+            print(f"[yt-dlp] Using subprocess mode...", flush=True)
             logger.debug("Using yt-dlp subprocess mode...")
 
             # Build yt-dlp command
@@ -316,8 +321,11 @@ class GroqTranscription:
             ]
 
             if cookies_file:
+                print(f"[yt-dlp] Adding cookies to command: --cookies {cookies_file}", flush=True)
                 cmd.insert(-1, '--cookies')
                 cmd.insert(-1, cookies_file)
+            else:
+                print(f"[yt-dlp] No cookies file - downloading without authentication", flush=True)
 
             # Try downloading with retries and backoff
             max_attempts = 3
