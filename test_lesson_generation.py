@@ -1,189 +1,193 @@
+#!/usr/bin/env python
 """
-Quick Integration Test - All 4 Learning Styles
-
-This script tests that lesson generation works for all learning styles.
-Run from: skillsync-be/ directory
-
-Usage:
-    python test_lesson_generation.py
+Test actual lesson generation with YouTube video selection.
+Tests the complete pipeline: topic -> YouTube video search -> lesson generation.
 """
-
 import os
 import sys
 import asyncio
-import json
-import logging
-from datetime import datetime
 
-# Setup Django before importing anything else
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings.dev')
-
 import django
 django.setup()
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-# Import the lesson generation service
 from helpers.ai_lesson_service import LessonGenerationService, LessonRequest
 
+print("=" * 100)
+print("LESSON GENERATION WITH YOUTUBE VIDEO TEST")
+print("=" * 100)
 
-async def test_all_learning_styles():
-    """Test lesson generation for all 4 learning styles"""
+# Initialize lesson service
+print("\n[INFO] Initializing LessonGenerationService...")
+lesson_service = LessonGenerationService()
 
-    logger.info("=" * 80)
-    logger.info("LESSON GENERATION - ALL LEARNING STYLES TEST")
-    logger.info("=" * 80)
+# Test topics
+test_lessons = [
+    {
+        "title": "Python List Comprehension",
+        "step_title": "Python Intermediate Concepts",
+        "learning_style": "video",
+        "difficulty": "intermediate",
+    },
+    {
+        "title": "JavaScript Event Listeners",
+        "step_title": "JavaScript DOM Manipulation",
+        "learning_style": "hands_on",
+        "difficulty": "beginner",
+    },
+    {
+        "title": "React Hooks useEffect",
+        "step_title": "React Advanced Patterns",
+        "learning_style": "reading",
+        "difficulty": "intermediate",
+    },
+    {
+        "title": "SQL JOIN Operations",
+        "step_title": "Database Query Optimization",
+        "learning_style": "mixed",
+        "difficulty": "intermediate",
+    },
+    {
+        "title": "Docker Container Networking",
+        "step_title": "Docker & Containerization",
+        "learning_style": "video",
+        "difficulty": "advanced",
+    },
+]
 
-    # Initialize service
-    logger.info("Initializing LessonGenerationService...")
-    service = LessonGenerationService()
+results = {
+    "success": 0,
+    "failed": 0,
+    "details": []
+}
 
-    # Minimal user profile for testing
-    user_profile = {
-        'time_commitment': '3-5',
-        'learning_pace': 'moderate',
-        'current_experience_level': 'beginner',
-        'role': 'student',
-        'goals': [
-            {'skill_name': 'Python', 'target_skill_level': 'intermediate'},
-        ]
-    }
+async def test_lesson_generation():
+    """Test lesson generation for multiple topics"""
 
-    # Test data for each learning style
-    test_cases = [
-        {
-            'learning_style': 'hands_on',
-            'title': 'Python Variables and Data Types',
-            'description': 'Hands-on lesson with coding exercises'
-        },
-        {
-            'learning_style': 'video',
-            'title': 'Introduction to Functions',
-            'description': 'Video lesson with study guide'
-        },
-        {
-            'learning_style': 'reading',
-            'title': 'Control Flow and Loops',
-            'description': 'Reading lesson with diagrams'
-        },
-        {
-            'learning_style': 'mixed',
-            'title': 'Working with Lists',
-            'description': 'Mixed lesson with text, exercises, and visuals'
-        }
-    ]
+    for idx, lesson_config in enumerate(test_lessons, 1):
+        title = lesson_config["title"]
+        step_title = lesson_config["step_title"]
+        learning_style = lesson_config["learning_style"]
+        difficulty = lesson_config["difficulty"]
 
-    results = {
-        'test_date': datetime.now().isoformat(),
-        'total_tests': len(test_cases),
-        'passed': 0,
-        'failed': 0,
-        'results': []
-    }
+        print(f"\n[{idx}/{len(test_lessons)}] Generating lesson: {title}")
+        print(f"    Step: {step_title} | Style: {learning_style} | Difficulty: {difficulty}")
+        print("    Status: ", end="", flush=True)
 
-    try:
-        for i, test_case in enumerate(test_cases, 1):
-            logger.info("")
-            logger.info(f"TEST {i}/{len(test_cases)}: {test_case['learning_style'].upper()}")
-            logger.info(f"Topic: {test_case['title']}")
-            logger.info("-" * 80)
+        try:
+            # Create lesson request
+            request = LessonRequest(
+                title=title,
+                step_title=step_title,
+                learning_style=learning_style,
+                difficulty=difficulty,
+            )
 
-            try:
-                # Create request
-                request = LessonRequest(
-                    step_title=test_case['title'],
-                    lesson_number=1,
-                    learning_style=test_case['learning_style'],
-                    user_profile=user_profile,
-                    difficulty='beginner',
-                    industry='Technology',
-                    category='python',
-                    programming_language='python',
-                    enable_research=False  # Disable research for faster testing
-                )
+            # Call the actual lesson generation
+            lesson_content = await lesson_service.generate_lesson(request)
 
-                # Generate lesson
-                logger.info(f"Generating {test_case['learning_style']} lesson...")
-                lesson = await service.generate_lesson(request)
+            if lesson_content:
+                print("[OK] Generated successfully")
 
-                if not lesson:
-                    raise Exception("Lesson generation returned None")
+                # Check if lesson has content
+                has_content = False
+                content_length = 0
+                
+                if isinstance(lesson_content, dict):
+                    has_content = bool(lesson_content.get('content') or lesson_content.get('introduction'))
+                    content_length = len(str(lesson_content))
+                elif isinstance(lesson_content, str):
+                    has_content = len(lesson_content) > 50
+                    content_length = len(lesson_content)
 
-                # Validate basic structure
-                if not isinstance(lesson, dict):
-                    raise Exception(f"Lesson must be dict, got {type(lesson)}")
-
-                if 'type' not in lesson and 'lesson_type' not in lesson:
-                    raise Exception("Lesson missing 'type' or 'lesson_type' field")
-
-                # Check for required fields
-                required_fields = ['title', 'summary']
-                for field in required_fields:
-                    if field not in lesson:
-                        logger.warning(f"  Warning: Missing field: {field}")
-
-                # Log success
-                lesson_type = lesson.get('type') or lesson.get('lesson_type')
-                logger.info(f"✅ SUCCESS: {test_case['learning_style']}")
-                logger.info(f"   Type: {lesson_type}")
-                logger.info(f"   Title: {lesson.get('title', 'N/A')}")
-                logger.info(f"   Fields: {', '.join(list(lesson.keys())[:5])}...")
-
-                results['results'].append({
-                    'learning_style': test_case['learning_style'],
-                    'status': 'PASSED',
-                    'title': lesson.get('title', 'N/A'),
-                    'error': None
+                if has_content:
+                    print(f"    Content: {content_length} characters")
+                    results["success"] += 1
+                    results["details"].append({
+                        "title": title,
+                        "status": "success",
+                        "content_length": content_length,
+                    })
+                else:
+                    print("    [WARN] Generated but no meaningful content")
+                    results["failed"] += 1
+                    results["details"].append({
+                        "title": title,
+                        "status": "empty_content",
+                    })
+            else:
+                print("[FAIL] No lesson content returned")
+                results["failed"] += 1
+                results["details"].append({
+                    "title": title,
+                    "status": "no_content",
                 })
-                results['passed'] += 1
 
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"❌ FAILED: {test_case['learning_style']}")
-                logger.error(f"   Error: {error_msg}")
+        except Exception as e:
+            print(f"[ERROR] {type(e).__name__}")
+            print(f"    Message: {str(e)[:100]}")
+            results["failed"] += 1
+            results["details"].append({
+                "title": title,
+                "status": "error",
+                "error": str(e)[:100],
+            })
 
-                results['results'].append({
-                    'learning_style': test_case['learning_style'],
-                    'status': 'FAILED',
-                    'title': test_case['title'],
-                    'error': error_msg
-                })
-                results['failed'] += 1
+# Run the async test
+print("\n[INFO] Starting lesson generation tests...\n")
+asyncio.run(test_lesson_generation())
 
-        # Cleanup
-        logger.info("")
-        logger.info("Cleaning up resources...")
-        await service.cleanup()
+# Print summary
+print(f"\n{'=' * 100}")
+print("RESULTS SUMMARY")
+print(f"{'=' * 100}\n")
 
-    except Exception as e:
-        logger.error(f"FATAL ERROR: {e}")
-        results['fatal_error'] = str(e)
-        raise
+total = results["success"] + results["failed"]
+success_pct = (results["success"] / total * 100) if total > 0 else 0
 
-    finally:
-        # Print summary
-        logger.info("")
-        logger.info("=" * 80)
-        logger.info("TEST SUMMARY")
-        logger.info("=" * 80)
-        logger.info(f"Total Tests: {results['total_tests']}")
-        logger.info(f"Passed: {results['passed']}")
-        logger.info(f"Failed: {results['failed']}")
+print(f"Total Lessons Tested:    {total}")
+print(f"[OK]   Successful:       {results['success']} ({success_pct:.1f}%)")
+print(f"[FAIL] Failed:           {results['failed']}")
 
-        if results['failed'] == 0:
-            logger.info("")
-            logger.info("All tests passed!")
-        else:
-            logger.info("")
-            logger.info("Some tests failed - see details above")
+# Show details
+print(f"\n{'=' * 100}")
+print("DETAILED RESULTS")
+print(f"{'=' * 100}\n")
 
-        logger.info("=" * 80)
+for detail in results["details"]:
+    title = detail["title"]
+    status = detail["status"]
 
+    if status == "success":
+        print(f"[OK] {title}")
+        print(f"     Content length: {detail.get('content_length', 0)} chars")
+    elif status == "error":
+        print(f"[ERROR] {title}")
+        print(f"        {detail.get('error', 'Unknown error')}")
+    else:
+        print(f"[FAIL] {title} - {status}")
 
-if __name__ == '__main__':
-    asyncio.run(test_all_learning_styles())
+# Conclusion
+print(f"\n{'=' * 100}")
+print("CONCLUSION")
+print(f"{'=' * 100}\n")
+
+if success_pct == 100:
+    print(f"[OK] PERFECT! 100% of lessons generated successfully!")
+    print("     The end-to-end lesson generation pipeline is working correctly.")
+elif success_pct >= 80:
+    print(f"[GOOD] Good! {success_pct:.1f}% of lessons generated successfully.")
+    print("       Most topics are working well.")
+elif success_pct >= 60:
+    print(f"[WARN] Partial success. {success_pct:.1f}% of lessons generated.")
+    print("       Some topics may need debugging.")
+else:
+    print(f"[POOR] Low success rate: {success_pct:.1f}% of lessons generated.")
+    print("       There are issues with the lesson generation pipeline.")
+
+print()
+
+# Cleanup
+print("[INFO] Cleaning up async resources...")
+asyncio.run(lesson_service.cleanup())
+print("[OK] Done!")

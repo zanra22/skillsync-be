@@ -111,10 +111,14 @@ class YouTubeService:
         Returns:
             Video metadata with quality indicators or None
         """
+        logger.info(f"[search_and_rank] CALLED with topic='{topic}', max_results={max_results}")
+
         youtube = self._get_youtube_service()
         if not youtube:
             logger.error("YouTube API not available (no credentials configured)")
             return None
+
+        logger.info(f"[search_and_rank] YouTube service initialized, proceeding with search...")
 
         try:
 
@@ -273,7 +277,9 @@ class YouTubeService:
             return best_video
 
         except Exception as e:
-            logger.error(f"❌ YouTube search failed: {e}")
+            logger.error(f"❌ YouTube search failed: {type(e).__name__}: {e}", exc_info=True)
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None
 
     def _parse_youtube_duration(self, duration_str: str) -> int:
