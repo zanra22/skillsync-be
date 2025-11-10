@@ -40,8 +40,23 @@ try:
             youtube_secret = secret_client.get_secret("youtube-service-account-json")
             if youtube_secret:
                 # The secret contains the JSON content as a string
-                YOUTUBE_SERVICE_ACCOUNT = json.loads(youtube_secret.value)
-                print("[OK] Loaded YouTube service account from Azure Key Vault")
+                secret_value = youtube_secret.value
+                print(f"[DEBUG] Secret value (first 100 chars): {secret_value[:100]}")
+
+                # Handle potential escaping issues
+                try:
+                    YOUTUBE_SERVICE_ACCOUNT = json.loads(secret_value)
+                    print("[OK] Loaded YouTube service account from Azure Key Vault")
+                except json.JSONDecodeError as json_err:
+                    # Try unescaping if it's been double-escaped
+                    try:
+                        print(f"[DEBUG] JSON parse failed: {json_err}, attempting to unescape...")
+                        unescaped = secret_value.encode().decode('unicode_escape')
+                        YOUTUBE_SERVICE_ACCOUNT = json.loads(unescaped)
+                        print("[OK] Loaded YouTube service account from Azure Key Vault (after unescaping)")
+                    except Exception as e2:
+                        print(f"[WARN] Failed to parse even after unescaping: {e2}")
+                        YOUTUBE_SERVICE_ACCOUNT = None
             else:
                 print("[WARN] youtube-service-account-json not found in Key Vault")
                 YOUTUBE_SERVICE_ACCOUNT = None
