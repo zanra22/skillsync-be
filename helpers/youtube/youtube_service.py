@@ -211,17 +211,23 @@ class YouTubeService:
                     }
 
                 # Determine transcript availability
-                # OPTIMIZATION: If caption filter worked, trust YouTube's API - no need to call transcript API
-                # Calling has_transcript() on every video causes rate limiting (429 errors)
+                # CRITICAL: YouTube's caption filter shows videos with captions, but NOT all captions are extractable as transcripts
+                # Some creators disable transcript availability while keeping subtitles enabled
+                # We MUST verify actual transcript accessibility via youtube-transcript-api
                 if caption_filter_worked:
-                    # Videos from caption filter search are guaranteed to have captions
-                    has_transcript = True
-                    logger.debug(f"   ✅ Video from caption-filtered search (has transcripts)")
+                    # Even though caption filter worked, verify the transcript is actually accessible
+                    # This catches the case where creator has subtitles but disabled transcripts
+                    logger.debug(f"   🔍 Caption filter matched, verifying transcript accessibility...")
+                    has_transcript = self.transcript_service.has_transcript(video_id)
+                    if has_transcript:
+                        logger.debug(f"   ✅ Verified: Video has accessible transcripts")
+                    else:
+                        logger.debug(f"   ⚠️ Video has captions but transcripts are disabled (creator restriction)")
                 else:
                     # Fallback search: skip transcript checking to avoid rate limiting
-                    # These videos may not have transcripts anyway
+                    # These videos don't have captions anyway
                     has_transcript = False
-                    logger.debug(f"   ⚠️ Video from fallback search (no transcript verification)")
+                    logger.debug(f"   ⚠️ Video from fallback search (no captions, no transcripts)")
 
                 # Build video metadata
                 video_data = {
@@ -254,6 +260,11 @@ class YouTubeService:
             if not videos_to_rank:
                 logger.warning("❌ No videos to rank")
                 return None
+
+            # Summary of transcript verification
+            videos_with_transcript = sum(1 for v in videos_to_rank if v.get('has_transcript'))
+            logger.info(f"[search_and_rank] Videos with accessible transcripts: {videos_with_transcript}/{len(videos_to_rank)}")
+            print(f"[search_and_rank] {videos_with_transcript}/{len(videos_to_rank)} videos have accessible transcripts", flush=True)
 
             # Rank videos by quality
             logger.info(f"[search_and_rank] About to rank {len(videos_to_rank)} videos")

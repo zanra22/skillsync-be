@@ -244,7 +244,7 @@ def trigger_lesson_generation(module_id, access_token, api_url):
             'Authorization': f'Bearer {access_token}',
             'Content-Type': 'application/json'
         },
-        timeout=30
+        timeout=10
     )
 
     print(f"📡 Response status: {response.status_code}")
