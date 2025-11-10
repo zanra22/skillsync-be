@@ -64,7 +64,7 @@ def _generate_oauth2_cookies(service_account_dict: dict) -> Optional[str]:
         logger.info("[OAuth2] Generating YouTube cookies from service account...")
 
         from google.oauth2 import service_account
-        import requests
+        from google.auth.transport.requests import Request
 
         # Create credentials from service account
         print("[OAuth2] Creating service account credentials...", flush=True)
@@ -77,7 +77,7 @@ def _generate_oauth2_cookies(service_account_dict: dict) -> Optional[str]:
 
         # Refresh credentials to get access token
         print("[OAuth2] Refreshing credentials to get OAuth2 token...", flush=True)
-        credentials.refresh(requests.Request())
+        credentials.refresh(Request())
         access_token = credentials.token
 
         print(f"[OAuth2] Access token obtained ({len(access_token)} chars), creating cookies file...", flush=True)
