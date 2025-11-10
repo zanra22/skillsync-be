@@ -71,6 +71,9 @@ coverage.xml
 *.py,cover
 .hypothesis/
 
+# Local test scripts (should not be committed)
+test_*.py
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
