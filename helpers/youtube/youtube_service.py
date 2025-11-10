@@ -119,7 +119,9 @@ class YouTubeService:
         try:
 
             # Search for video
-            search_query = f"{topic} tutorial programming"
+            # Note: Keep query simple to ensure caption filter returns results
+            # Adding "tutorial programming" too restrictive and causes zero results with caption filter
+            search_query = f"{topic}"
             logger.info(f"🔍 Searching YouTube: {search_query}")
 
             # First try: Get videos WITH captions
@@ -134,6 +136,9 @@ class YouTubeService:
                 videoCaption='closedCaption',  # Prefer captioned videos
                 relevanceLanguage='en'
             ).execute()
+
+            # Track if caption filter search returned results
+            caption_filter_worked = bool(search_response.get('items'))
 
             # Fallback: If no captioned videos, get any relevant videos
             if not search_response.get('items'):
@@ -191,8 +196,18 @@ class YouTubeService:
                         'is_verified': False,
                     }
 
-                # Check if transcript available
-                has_transcript = self.transcript_service.has_transcript(video_id)
+                # Determine transcript availability
+                # OPTIMIZATION: If caption filter worked, trust YouTube's API - no need to call transcript API
+                # Calling has_transcript() on every video causes rate limiting (429 errors)
+                if caption_filter_worked:
+                    # Videos from caption filter search are guaranteed to have captions
+                    has_transcript = True
+                    logger.debug(f"   ✅ Video from caption-filtered search (has transcripts)")
+                else:
+                    # Fallback search: skip transcript checking to avoid rate limiting
+                    # These videos may not have transcripts anyway
+                    has_transcript = False
+                    logger.debug(f"   ⚠️ Video from fallback search (no transcript verification)")
 
                 # Build video metadata
                 video_data = {

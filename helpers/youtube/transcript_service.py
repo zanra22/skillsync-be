@@ -61,12 +61,29 @@ class TranscriptService:
         Actually tries to fetch first few entries to verify it works.
         Returns True if transcript available, False otherwise.
 
+        RATE LIMITING: Adds delay between checks to prevent 429 errors
+        from YouTube's transcript API.
+
         Args:
             video_id: YouTube video ID
 
         Returns:
             True if transcript is available, False otherwise
         """
+        # RATE LIMITING: Prevent 429 errors from rapid transcript checks
+        # Each call to YouTubeTranscriptApi.get_transcript() hits YouTube's caption endpoint
+        # Without rate limiting, checking 10 videos = 10 rapid requests = 429 error
+        current_time = time.time()
+        time_since_last_call = current_time - self.last_youtube_call
+
+        # 1 second minimum between calls to transcript API
+        if time_since_last_call < 1:
+            wait_time = 1 - time_since_last_call
+            logger.debug(f"⏳ Rate limiting has_transcript(): waiting {wait_time:.2f}s...")
+            time.sleep(wait_time)
+
+        self.last_youtube_call = time.time()
+
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
             # Actually try to fetch transcript (not just list)
@@ -80,7 +97,7 @@ class TranscriptService:
             return len(transcript) > 0
 
         except Exception as e:
-            # If any error (XML parse, not found, etc), assume no transcript
+            # If any error (XML parse, not found, 429 rate limit, etc), assume no transcript
             logger.debug(f"   No accessible transcript for {video_id}: {str(e)[:50]}")
             return False
 
