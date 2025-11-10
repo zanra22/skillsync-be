@@ -134,13 +134,29 @@ class GroqTranscription:
             groq_api_key: Groq API key for Whisper access
             service_account: Google service account dict for YouTube OAuth2 authentication
         """
+        print(f"[GroqTranscription.__init__] CALLED", flush=True)
+        print(f"[GroqTranscription.__init__] service_account type: {type(service_account)}", flush=True)
+        print(f"[GroqTranscription.__init__] service_account is None: {service_account is None}", flush=True)
+
         self.groq_api_key = groq_api_key
         self.service_account = service_account
         self.oauth2_cookies_file = None
+        self._oauth2_cookies_generated = False
 
-        # Generate OAuth2 cookies from service account if provided
-        if self.service_account:
-            self.oauth2_cookies_file = _generate_oauth2_cookies(self.service_account)
+        print(f"[GroqTranscription.__init__] Initialization complete - OAuth2 cookies will be generated lazily on first use", flush=True)
+
+    def _ensure_oauth2_cookies(self) -> None:
+        """
+        Lazily generate OAuth2 cookies from service account on first use.
+        This defers the network call until actually needed, preventing initialization hangs.
+        """
+        if self._oauth2_cookies_generated or not self.service_account:
+            return
+
+        print(f"[GroqTranscription._ensure_oauth2_cookies] Generating OAuth2 cookies on first use...", flush=True)
+        self.oauth2_cookies_file = _generate_oauth2_cookies(self.service_account)
+        self._oauth2_cookies_generated = True
+        print(f"[GroqTranscription._ensure_oauth2_cookies] Complete: {bool(self.oauth2_cookies_file)}", flush=True)
 
     def transcribe(self, video_id: str) -> Optional[str]:
         """
@@ -222,6 +238,9 @@ class GroqTranscription:
             Path to temporary audio file or None if failed
         """
         try:
+            # Lazily generate OAuth2 cookies on first actual use
+            self._ensure_oauth2_cookies()
+
             video_url = f'https://www.youtube.com/watch?v={video_id}'
 
             # Create temporary file

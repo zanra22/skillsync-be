@@ -69,14 +69,20 @@ class LessonGenerationService:
         self.groq_api_key = os.getenv('GROQ_API_KEY')  # For Whisper transcription fallback
         self.openrouter_api_key = os.getenv('OPENROUTER_API_KEY')  # For DeepSeek V3.1 FREE
 
+        # Log API key availability for debugging
+        print(f"[HybridLessonService.__init__] GROQ_API_KEY configured: {bool(self.groq_api_key)}", flush=True)
+        print(f"[HybridLessonService.__init__] YouTube API key configured: {bool(self.youtube_api_key)}", flush=True)
+
         # YouTube service account for OAuth2 authentication (prevents bot detection)
         # Loaded from Django settings (either from Key Vault in production or env var)
         try:
             from django.conf import settings
             self.youtube_service_account = getattr(settings, 'YOUTUBE_SERVICE_ACCOUNT', None)
+            print(f"[HybridLessonService.__init__] YOUTUBE_SERVICE_ACCOUNT loaded from Django settings: {bool(self.youtube_service_account)}", flush=True)
         except Exception as e:
             logger.warning(f"Could not load YouTube service account from Django settings: {e}")
             self.youtube_service_account = None
+            print(f"[HybridLessonService.__init__] YOUTUBE_SERVICE_ACCOUNT load failed: {e}", flush=True)
 
         # Multi-source research engine
         self.research_engine = multi_source_research_engine
@@ -84,6 +90,9 @@ class LessonGenerationService:
 
         # YouTube service with quality ranking and transcript fallback
         # Now with OAuth2 service account authentication (prevents bot detection)
+        print(f"[HybridLessonService.__init__] Initializing YouTubeService with:", flush=True)
+        print(f"  - groq_api_key: {bool(self.groq_api_key)}", flush=True)
+        print(f"  - youtube_service_account: {bool(self.youtube_service_account)}", flush=True)
         self.youtube_service = YouTubeService(
             self.youtube_api_key,
             self.groq_api_key,
@@ -92,8 +101,10 @@ class LessonGenerationService:
         self.video_analyzer = VideoAnalyzer()
         if self.youtube_service_account:
             logger.info("🎥 YouTube service initialized with OAuth2 service account authentication")
+            print("[HybridLessonService.__init__] Using OAuth2 service account authentication", flush=True)
         else:
             logger.info("🎥 YouTube service initialized with API key fallback")
+            print("[HybridLessonService.__init__] Using API key fallback (no service account)", flush=True)
 
         # API URLs - Use Gemini 2.0 Flash Experimental (stable, free tier)
         # Free tier: 15 RPM, 200 RPD (better RPM than 2.5 Flash which has 10 RPM)

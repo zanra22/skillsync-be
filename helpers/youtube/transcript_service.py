@@ -37,10 +37,21 @@ class TranscriptService:
             groq_api_key: Optional Groq API key for fallback transcription
             service_account: Optional Google service account dict for YouTube OAuth2 authentication
         """
+        print(f"[TranscriptService.__init__] CALLED", flush=True)
+        print(f"[TranscriptService.__init__] groq_api_key: {bool(groq_api_key)}", flush=True)
+        print(f"[TranscriptService.__init__] service_account: {bool(service_account)}", flush=True)
+
         self.youtube_api_key = youtube_api_key
         self.groq_api_key = groq_api_key
         self.service_account = service_account
-        self.groq_transcription = GroqTranscription(groq_api_key, service_account=service_account) if groq_api_key else None
+
+        if groq_api_key:
+            print(f"[TranscriptService.__init__] Creating GroqTranscription with service_account", flush=True)
+            self.groq_transcription = GroqTranscription(groq_api_key, service_account=service_account)
+        else:
+            print(f"[TranscriptService.__init__] Skipping GroqTranscription - groq_api_key is None", flush=True)
+            self.groq_transcription = None
+
         self.last_youtube_call = 0
 
     def has_transcript(self, video_id: str) -> bool:
