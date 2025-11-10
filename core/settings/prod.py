@@ -26,12 +26,17 @@ try:
     import json
 
     KEYVAULT_URL = os.getenv('AZURE_KEYVAULT_URL')
+    print(f"[DEBUG] AZURE_KEYVAULT_URL env var: {KEYVAULT_URL}")
+
     if KEYVAULT_URL:
         try:
+            print("[DEBUG] Attempting to create DefaultAzureCredential...")
             credential = DefaultAzureCredential()
+            print("[DEBUG] Creating SecretClient...")
             secret_client = SecretClient(vault_url=KEYVAULT_URL, credential=credential)
 
             # Retrieve YouTube service account JSON from Key Vault
+            print("[DEBUG] Retrieving 'youtube-service-account-json' secret from Key Vault...")
             youtube_secret = secret_client.get_secret("youtube-service-account-json")
             if youtube_secret:
                 # The secret contains the JSON content as a string
@@ -41,15 +46,17 @@ try:
                 print("[WARN] youtube-service-account-json not found in Key Vault")
                 YOUTUBE_SERVICE_ACCOUNT = None
         except Exception as e:
-            print(f"[WARN] Failed to load YouTube service account from Key Vault: {e}")
+            print(f"[WARN] Failed to load YouTube service account from Key Vault: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
             YOUTUBE_SERVICE_ACCOUNT = None
     else:
-        print("[INFO] AZURE_KEYVAULT_URL not set - YouTube service account will not be loaded from Key Vault")
+        print("[WARN] AZURE_KEYVAULT_URL not set - YouTube service account will not be loaded from Key Vault")
         YOUTUBE_SERVICE_ACCOUNT = None
 
-except ImportError:
+except ImportError as e:
     # Azure SDK not available (shouldn't happen in production)
-    print("[WARN] Azure SDK not available - YouTube service account authentication disabled")
+    print(f"[WARN] Azure SDK ImportError - YouTube service account authentication disabled: {e}")
     YOUTUBE_SERVICE_ACCOUNT = None
 
 # CRITICAL FIX: Remove CORS_ALLOWED_ORIGINS from globals in production
