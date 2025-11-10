@@ -56,27 +56,31 @@ def _generate_oauth2_cookies(service_account_dict: dict) -> Optional[str]:
         Path to cookies file or None if generation failed
     """
     if not service_account_dict:
+        logger.info("[OAuth2] No service account dict provided, skipping OAuth2 cookies generation")
         return None
 
     try:
+        print("[OAuth2] Generating YouTube cookies from service account...", flush=True)
+        logger.info("[OAuth2] Generating YouTube cookies from service account...")
+
         from google.oauth2 import service_account
         import requests
 
-        logger.debug("[OAuth2] Generating YouTube cookies from service account...")
-
         # Create credentials from service account
+        print("[OAuth2] Creating service account credentials...", flush=True)
         credentials = service_account.Credentials.from_service_account_info(
             service_account_dict,
             scopes=['https://www.googleapis.com/auth/youtube.readonly']
         )
 
-        logger.debug("[OAuth2] Service account credentials created")
+        print("[OAuth2] Service account credentials created", flush=True)
 
         # Refresh credentials to get access token
+        print("[OAuth2] Refreshing credentials to get OAuth2 token...", flush=True)
         credentials.refresh(requests.Request())
         access_token = credentials.token
 
-        logger.debug("[OAuth2] Access token obtained, converting to Netscape cookies format...")
+        print(f"[OAuth2] Access token obtained ({len(access_token)} chars), creating cookies file...", flush=True)
 
         # Create cookies file in Netscape format (compatible with yt-dlp)
         # This mimics browser cookies but uses OAuth2 token
@@ -97,11 +101,17 @@ def _generate_oauth2_cookies(service_account_dict: dict) -> Optional[str]:
 
         tmp.close()
 
-        logger.info(f"[OK] OAuth2 cookies generated: {cookies_file}")
+        msg = f"[OK] OAuth2 cookies generated successfully: {cookies_file}"
+        print(msg, flush=True)
+        logger.info(msg)
         return cookies_file
 
     except Exception as e:
-        logger.warning(f"[WARN] Failed to generate OAuth2 cookies: {type(e).__name__}: {str(e)[:100]}")
+        error_msg = f"[ERROR] Failed to generate OAuth2 cookies: {type(e).__name__}: {str(e)}"
+        print(error_msg, flush=True)
+        logger.error(error_msg)
+        import traceback
+        traceback.print_exc()
         return None
 
 
