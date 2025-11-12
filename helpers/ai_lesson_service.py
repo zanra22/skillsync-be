@@ -2329,6 +2329,9 @@ Generate for: {request.step_title}"""
                     lesson_data = await self.generate_lesson(lesson_request)
 
                     # Save to database
+                    if not lesson_data:
+                        raise Exception(f"Lesson {lesson_num} generation returned None")
+
                     lesson_content = await sync_to_async(LessonContent.objects.create)(
                         module=module,
                         lesson_number=lesson_num,
@@ -2338,11 +2341,16 @@ Generate for: {request.step_title}"""
                         source_type='ai_only',
                         source_attribution=lesson_data.get('source_attribution', {})
                     )
+
+                    # Verify the lesson was actually saved
+                    if not lesson_content or not lesson_content.id:
+                        raise Exception(f"Lesson {lesson_num} was not saved to database")
+
                     logger.info(f"  ✅ Lesson {lesson_num} created: {lesson_content.id}")
                     lessons_created += 1
 
                 except Exception as lesson_error:
-                    logger.warning(f"  ⚠️ Failed to generate lesson {lesson_num}: {lesson_error}")
+                    logger.error(f"  ❌ Failed to generate/save lesson {lesson_num}: {lesson_error}", exc_info=True)
                     # Continue with next lesson even if one fails
                     continue
 

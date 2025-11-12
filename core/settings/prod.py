@@ -97,3 +97,66 @@ if 'CORS_ALLOWED_ORIGINS' in globals():
     print(f"Production CORS_ALLOWED_ORIGINS: {globals()['CORS_ALLOWED_ORIGINS']}")
 else:
     print("Production: CORS_ALLOWED_ORIGINS not in globals (allowing all origins)")
+
+# Logging for production
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+        'production_file': {
+            'class': 'logging.FileHandler',
+            'filename': 'skillsync_production.log',
+            'level': 'INFO',
+            'encoding': 'utf-8',
+        },
+    },
+    'root': {
+        'handlers': ['console', 'production_file'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'auth': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'ai_roadmap_service': {
+            'handlers': ['console', 'production_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'helpers.youtube': {
+            'handlers': ['console', 'production_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'helpers.youtube.youtube_service': {
+            'handlers': ['console', 'production_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'helpers.youtube.transcript_service': {
+            'handlers': ['console', 'production_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'helpers.multi_source_research': {
+            'handlers': ['console', 'production_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'helpers.ai_lesson_service': {
+            'handlers': ['console', 'production_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}

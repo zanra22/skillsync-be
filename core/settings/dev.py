@@ -63,5 +63,30 @@ LOGGING = {
             'level': 'INFO',
             'propagate': False,
         },
+        'helpers.youtube': {
+            'handlers': ['console', 'roadmap_file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'helpers.youtube.youtube_service': {
+            'handlers': ['console', 'roadmap_file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'helpers.youtube.transcript_service': {
+            'handlers': ['console', 'roadmap_file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'helpers.multi_source_research': {
+            'handlers': ['console', 'roadmap_file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'helpers.ai_lesson_service': {
+            'handlers': ['console', 'roadmap_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
     },
 }

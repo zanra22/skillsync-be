@@ -702,6 +702,15 @@ class LessonsMutation:
                         )
                         logger.info(f"✅ Generated {lesson_count} lessons for module")
 
+                        # CRITICAL: Check that lessons were actually created
+                        if lesson_count == 0:
+                            logger.error(f"❌ Lesson generation returned 0 lessons - marking as failed")
+                            module.generation_status = 'failed'
+                            module.generation_error = "Lesson generation failed: No lessons were created"
+                            module.generation_completed_at = timezone.now()
+                            await module.asave()
+                            raise Exception("Lesson generation failed: No lessons were created")
+
                         # Update status to completed
                         module.generation_status = 'completed'
                         module.generation_completed_at = timezone.now()
