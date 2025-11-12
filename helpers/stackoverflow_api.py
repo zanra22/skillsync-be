@@ -58,24 +58,45 @@ class StackOverflowAPIService:
         min_votes: int = 5
     ) -> List[Dict]:
         """
-        Search Stack Overflow questions with advanced filtering
-        
+        Search Stack Overflow questions with advanced filtering.
+
+        PHASE 2.5: Supports dynamic compensation (5-8 results) based on missing sources.
+
         Args:
             query: Search query
             tags: Optional list of tags to filter by (e.g., ['python', 'variables'])
-            max_results: Maximum number of results (default: 5)
+            max_results: Maximum number of results (default: 5, can be 5-8 for compensation)
             min_votes: Minimum vote count (default: 5)
-        
+
         Returns:
             List of question dictionaries with answers
-        
+
         Note:
             Stack Exchange API has strict IP-based throttling:
             - Max 30 requests/second per IP
             - Ban period: 30 seconds to several minutes
             - If banned, gracefully returns empty list to allow other sources
+
+            PHASE 2.5: max_results can now be 5-8 based on:
+            - 5: All sources available (base)
+            - 6: 1 source unavailable (YouTube, GitHub, or Dev.to)
+            - 7: 2 sources unavailable
+            - 8: 3+ sources unavailable (capped at 8)
         """
         try:
+            # Validate max_results (compensation range is 5-8)
+            if not (5 <= max_results <= 8):
+                logger.warning(f"⚠️ max_results={max_results} out of range [5-8], clamping to nearest boundary")
+                max_results = max(5, min(8, max_results))
+
+            # Log compensation info if > 5
+            if max_results > 5:
+                skipped_sources_count = max_results - 5
+                logger.info(
+                    f"📊 Stack Overflow Compensation Active: "
+                    f"Fetching {max_results} answers (base 5 + {skipped_sources_count} missing sources)"
+                )
+
             # Build search parameters for /questions endpoint
             # This endpoint is more reliable than /search or /search/advanced
             params = {
@@ -85,17 +106,17 @@ class StackOverflowAPIService:
                 'pagesize': max_results * 2,  # Get more to filter for accepted answers
                 'filter': '!9_bDDxJY5',  # Predefined filter that includes body
             }
-            
+
             # Add search query using 'intitle' for better results
             if query:
                 params['intitle'] = query
-            
+
             if tags:
                 params['tagged'] = ';'.join(tags)
-            
+
             if self.api_key:
                 params['key'] = self.api_key
-            
+
             # Search for questions using /questions endpoint (most reliable)
             async with httpx.AsyncClient(timeout=self.timeout, headers=self.headers) as client:
                 response = await client.get(
@@ -104,16 +125,16 @@ class StackOverflowAPIService:
                 )
                 response.raise_for_status()
                 data = response.json()
-            
+
             questions = data.get('items', [])
-            
+
             # Filter by minimum votes AND accepted answer
             filtered_questions = [
                 q for q in questions
-                if q.get('score', 0) >= min_votes 
+                if q.get('score', 0) >= min_votes
                 and q.get('accepted_answer_id') is not None  # Only questions with accepted answers
             ]
-            
+
             # Fetch answers for each question
             results = []
             for question in filtered_questions[:max_results]:
@@ -122,8 +143,10 @@ class StackOverflowAPIService:
                 )
                 if question_with_answers:
                     results.append(question_with_answers)
-            
+
             logger.info(f"✓ Found {len(results)} Stack Overflow Q&As for: {query}")
+            if max_results > 5:
+                logger.info(f"  (Compensated fetch: {max_results} answers, {len(results)} returned)")
             return results
             
         except httpx.TimeoutException:

@@ -149,14 +149,44 @@ class GroqTranscription:
         """
         Lazily generate OAuth2 cookies from service account on first use.
         This defers the network call until actually needed, preventing initialization hangs.
+
+        CRITICAL FIX 1.1: Validates file exists, is readable, and has correct permissions.
         """
         if self._oauth2_cookies_generated or not self.service_account:
             return
 
-        print(f"[GroqTranscription._ensure_oauth2_cookies] Generating OAuth2 cookies on first use...", flush=True)
-        self.oauth2_cookies_file = _generate_oauth2_cookies(self.service_account)
-        self._oauth2_cookies_generated = True
-        print(f"[GroqTranscription._ensure_oauth2_cookies] Complete: {bool(self.oauth2_cookies_file)}", flush=True)
+        try:
+            print(f"[GroqTranscription._ensure_oauth2_cookies] Generating OAuth2 cookies on first use...", flush=True)
+            self.oauth2_cookies_file = _generate_oauth2_cookies(self.service_account)
+
+            # CRITICAL FIX 1.1: Validate OAuth2 cookies file
+            if self.oauth2_cookies_file:
+                # Check file exists
+                if not os.path.exists(self.oauth2_cookies_file):
+                    print(f"[ERROR] OAuth2 cookies file NOT created: {self.oauth2_cookies_file}", flush=True)
+                    logger.error(f"OAuth2 cookies file not created at: {self.oauth2_cookies_file}")
+                    self.oauth2_cookies_file = None
+                else:
+                    # Make file readable by subprocess (subprocess might run as different user)
+                    try:
+                        os.chmod(self.oauth2_cookies_file, 0o644)
+                        file_size = os.path.getsize(self.oauth2_cookies_file)
+                        print(f"[OK] OAuth2 cookies file ready: {file_size} bytes at {self.oauth2_cookies_file}", flush=True)
+                        logger.info(f"✅ OAuth2 cookies file validated: {file_size} bytes, permissions 0o644")
+                    except Exception as perm_err:
+                        print(f"[WARNING] Failed to set file permissions: {perm_err}", flush=True)
+                        logger.warning(f"Failed to set OAuth2 cookies file permissions: {perm_err}")
+                        # Continue anyway - might still work with current permissions
+            else:
+                print(f"[ERROR] OAuth2 cookies generation returned None", flush=True)
+                logger.error("OAuth2 cookies generation failed - returned None")
+
+            self._oauth2_cookies_generated = True
+        except Exception as e:
+            print(f"[ERROR] Exception in _ensure_oauth2_cookies: {type(e).__name__}: {str(e)[:100]}", flush=True)
+            logger.error(f"Exception in _ensure_oauth2_cookies: {type(e).__name__}: {str(e)[:200]}")
+            self.oauth2_cookies_file = None
+            self._oauth2_cookies_generated = True  # Mark as attempted (don't retry infinitely)
 
     def transcribe(self, video_id: str) -> Optional[str]:
         """
@@ -241,6 +271,39 @@ class GroqTranscription:
             # Lazily generate OAuth2 cookies on first actual use
             self._ensure_oauth2_cookies()
 
+            # CRITICAL FIX 1.5: Refresh OAuth2 token before download to ensure it's valid
+            # OAuth2 tokens expire after ~1 hour, so we refresh before each use
+            if self.service_account and self.oauth2_cookies_file:
+                try:
+                    print(f"[GroqTranscription._download_audio] Refreshing OAuth2 token before download...", flush=True)
+                    from google.oauth2 import service_account
+                    from google.auth.transport.requests import Request
+
+                    credentials = service_account.Credentials.from_service_account_info(
+                        self.service_account,
+                        scopes=['https://www.googleapis.com/auth/youtube.readonly']
+                    )
+
+                    # Check if token needs refresh
+                    if not credentials.valid:
+                        print(f"[GroqTranscription._download_audio] Token invalid, refreshing...", flush=True)
+                        credentials.refresh(Request())
+                        print(f"[GroqTranscription._download_audio] Token refreshed successfully", flush=True)
+                        logger.info("✅ OAuth2 token refreshed before download")
+
+                        # Regenerate cookies file with fresh token
+                        self.oauth2_cookies_file = _generate_oauth2_cookies(self.service_account)
+                        if self.oauth2_cookies_file:
+                            os.chmod(self.oauth2_cookies_file, 0o644)
+                            print(f"[GroqTranscription._download_audio] New OAuth2 cookies file ready", flush=True)
+                    else:
+                        print(f"[GroqTranscription._download_audio] Token still valid, proceeding...", flush=True)
+
+                except Exception as refresh_err:
+                    print(f"[WARNING] Failed to refresh OAuth2 token: {type(refresh_err).__name__}: {str(refresh_err)[:100]}", flush=True)
+                    logger.warning(f"Failed to refresh OAuth2 token: {refresh_err}")
+                    # Continue anyway - might still work with existing token
+
             video_url = f'https://www.youtube.com/watch?v={video_id}'
 
             # Create temporary file
@@ -308,15 +371,19 @@ class GroqTranscription:
             logger.debug("Using yt-dlp subprocess mode...")
 
             # Build yt-dlp command
+            # CRITICAL FIX 1.2: Add User-Agent to prevent bot detection
+            # CRITICAL FIX 1.3: Remove -U (update flag) and --quiet for error visibility
             cmd = [
                 'yt-dlp',
-                '-vU',
+                '-v',  # FIXED: Changed from '-vU' → '-v' (remove update check)
+                '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',  # CRITICAL FIX 1.2
                 '-x',  # Extract audio only
                 '--audio-format', 'mp3',
                 '--audio-quality', '5',  # Lower quality = faster download
+                '--socket-timeout', '30',  # CRITICAL FIX 1.4: Add socket timeout
                 '-o', audio_file,
                 '--no-playlist',
-                '--quiet',
+                # REMOVED: '--quiet' - CRITICAL FIX 1.3: Need to see errors for debugging
                 video_url
             ]
 

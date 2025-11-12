@@ -52,6 +52,255 @@ class LessonRequest:
     enable_research: bool = True  # Enable multi-source research (default: True)
 
 
+@dataclass
+class ResearchSourceStatus:
+    """
+    PHASE 2.3: Track research source availability and tier usage.
+
+    Used to calculate Stack Overflow compensation:
+    - Base: 5 answers
+    - +1 for each unavailable source (YouTube, GitHub, Dev.to)
+    - Capped at 8 maximum
+
+    Purpose: Ensure comprehensive coverage when sources are unavailable.
+    """
+
+    # Source availability flags
+    official_docs_available: bool = False
+    stackoverflow_available: bool = True  # Always available (IP-based quota)
+    github_available: bool = False
+    devto_available: bool = False
+    youtube_available: bool = False
+
+    # Tier usage information
+    devto_tier_used: Optional[int] = None  # 365 or 730 (days), None if failed
+    youtube_source: Optional[str] = None  # 'youtube', 'dailymotion', or None
+
+    # Compensation calculation
+    so_compensation_count: int = 5  # Base count (5 answers)
+    skipped_sources: List[str] = None  # Sources that were skipped
+
+    def __post_init__(self):
+        """Initialize skipped_sources if not provided"""
+        if self.skipped_sources is None:
+            self.skipped_sources = []
+
+    def mark_source_available(self, source: str, tier_info: Optional[Any] = None) -> None:
+        """
+        Mark a source as available after successful fetch.
+
+        Args:
+            source: Source name ('official_docs', 'github', 'devto', 'youtube')
+            tier_info: Optional tier information (days for Dev.to, source name for YouTube)
+        """
+        if source == 'official_docs':
+            self.official_docs_available = True
+        elif source == 'github':
+            self.github_available = True
+        elif source == 'devto':
+            self.devto_available = True
+            if tier_info:
+                self.devto_tier_used = tier_info
+        elif source == 'youtube':
+            self.youtube_available = True
+            if tier_info:
+                self.youtube_source = tier_info
+
+    def mark_source_unavailable(self, source: str) -> None:
+        """
+        Mark a source as unavailable (failed, skipped, or returned no results).
+
+        Args:
+            source: Source name ('official_docs', 'github', 'devto', 'youtube')
+        """
+        if source == 'official_docs':
+            self.official_docs_available = False
+            self.skipped_sources.append('official_docs')
+        elif source == 'github':
+            self.github_available = False
+            self.skipped_sources.append('github')
+        elif source == 'devto':
+            self.devto_available = False
+            self.skipped_sources.append('devto')
+        elif source == 'youtube':
+            self.youtube_available = False
+            self.skipped_sources.append('youtube')
+
+    def calculate_so_compensation(self) -> int:
+        """
+        Calculate Stack Overflow compensation based on unavailable sources.
+
+        Formula:
+        - Base: 5 answers
+        - +1 for each unavailable source from: [youtube, github, devto]
+        - Skip official_docs (always paid for where available)
+        - Cap at 8 maximum
+
+        Returns:
+            Number of Stack Overflow answers to fetch (5-8)
+        """
+        # Count unavailable sources (excluding official_docs which is optional)
+        unavailable_count = 0
+
+        if not self.youtube_available:
+            unavailable_count += 1
+        if not self.github_available:
+            unavailable_count += 1
+        if not self.devto_available:
+            unavailable_count += 1
+
+        # Calculate compensation
+        self.so_compensation_count = min(5 + unavailable_count, 8)
+
+        logger.info(
+            f"📊 SO Compensation: base(5) + {unavailable_count} unavailable sources "
+            f"= {self.so_compensation_count} answers (max: 8)"
+        )
+
+        return self.so_compensation_count
+
+    def get_skipped_sources(self) -> List[str]:
+        """
+        Get list of sources that were skipped/unavailable.
+
+        Returns:
+            List of source names that failed or returned no results
+        """
+        return self.skipped_sources
+
+    def get_summary(self) -> str:
+        """
+        Get human-readable summary of source availability.
+
+        Returns:
+            Formatted string describing which sources were available
+        """
+        parts = []
+
+        if self.official_docs_available:
+            parts.append("✓ Official Docs")
+        if self.stackoverflow_available:
+            parts.append(f"✓ Stack Overflow ({self.so_compensation_count} answers)")
+        if self.github_available:
+            parts.append("✓ GitHub")
+        if self.devto_available:
+            tier_str = f" ({self.devto_tier_used}d)" if self.devto_tier_used else ""
+            parts.append(f"✓ Dev.to{tier_str}")
+        if self.youtube_available:
+            source_str = f" ({self.youtube_source.capitalize()})" if self.youtube_source else ""
+            parts.append(f"✓ Video{source_str}")
+
+        if not parts:
+            return "⚠️ No research sources available"
+
+        return " | ".join(parts)
+
+
+def build_research_metadata(research_data: Optional[Dict], source_status: Optional['ResearchSourceStatus'] = None, source_type: str = 'multi_source') -> Dict:
+    """
+    PHASE 2.7: Build comprehensive research metadata for lesson storage.
+
+    Creates a detailed metadata structure tracking:
+    - Research execution time
+    - Source availability & tier usage
+    - Quality metrics
+    - Stack Overflow compensation details
+    - Video fallback information
+
+    Args:
+        research_data: Data returned from multi_source_research_engine.research_topic()
+        source_status: ResearchSourceStatus object with availability tracking
+        source_type: 'multi_source' or 'ai_only'
+
+    Returns:
+        Comprehensive metadata dict for lesson storage
+    """
+    if not research_data:
+        return {'source_type': source_type}
+
+    sources = research_data.get('sources', {})
+    metadata = {
+        'source_type': source_type,
+        'research_time_seconds': research_data.get('research_time_seconds', 0),
+        'sources_count': len([s for s in sources.values() if s]),  # Count non-empty sources
+        'quality_score': research_data.get('quality_score', 0),  # If available
+    }
+
+    # Add source availability tracking (PHASE 2.7)
+    if source_status:
+        metadata['source_availability'] = {
+            'official_docs': source_status.official_docs_available,
+            'stackoverflow': source_status.stackoverflow_available,
+            'github': source_status.github_available,
+            'devto': source_status.devto_available,
+            'devto_tier': source_status.devto_tier_used,  # 365 or 730 days
+            'youtube': source_status.youtube_available,
+            'youtube_source': source_status.youtube_source,  # 'youtube' or 'dailymotion'
+        }
+
+        # Stack Overflow compensation details
+        if source_status.so_compensation_count != 5:
+            metadata['so_compensation'] = {
+                'base_count': 5,
+                'compensation_count': source_status.so_compensation_count,
+                'unavailable_sources': [
+                    s for s in ['youtube', 'github', 'devto']
+                    if not getattr(source_status, f'{s}_available', False)
+                ]
+            }
+
+    # Add individual source details
+    metadata['sources_detail'] = {}
+
+    # Official docs
+    if sources.get('official_docs'):
+        metadata['sources_detail']['official_docs'] = {
+            'found': True,
+            'url': sources['official_docs'].get('url')
+        }
+
+    # Stack Overflow
+    if sources.get('stackoverflow_answers'):
+        answers = sources['stackoverflow_answers']
+        metadata['sources_detail']['stackoverflow'] = {
+            'count': len(answers),
+            'min_votes': min((a.get('votes', 0) for a in answers), default=0)
+        }
+
+    # GitHub
+    if sources.get('github_examples'):
+        github_items = sources['github_examples']
+        metadata['sources_detail']['github'] = {
+            'count': len(github_items),
+            'languages': list(set(
+                g.get('language', 'unknown').lower()
+                for g in github_items if g.get('language')
+            ))
+        }
+
+    # Dev.to
+    if sources.get('dev_articles'):
+        articles = sources['dev_articles']
+        metadata['sources_detail']['devto'] = {
+            'count': len(articles),
+            'tier_used': articles[0].get('source_tier') if articles else None
+        }
+
+    # YouTube (PHASE 2.6)
+    if sources.get('youtube_videos'):
+        video = sources['youtube_videos']
+        metadata['sources_detail']['youtube'] = {
+            'video_id': video.get('video_id'),
+            'duration_minutes': video.get('duration_minutes', 0),
+            'has_transcript': video.get('has_transcript', False),
+            'transcript_source': 'youtube' if video.get('has_transcript') else None,
+            'source': research_data.get('video_source', 'unknown'),
+            'fallback_reason': research_data.get('video_fallback_reason')
+        }
+
+    return metadata
+
+
 import re
 
 class LessonGenerationService:
@@ -619,14 +868,17 @@ class LessonGenerationService:
         try:
             # Step 1: Run multi-source research (if enabled)
             research_data = None
+            source_status = None
             if request.enable_research:
                 logger.info("🔬 [LessonGen] Starting multi-source research...")
-                research_data = await self._run_research(request)
+                research_data, source_status = await self._run_research(request)
 
                 if research_data:
                     research_summary = research_data.get('summary', 'No summary')
                     research_time = research_data.get('research_time_seconds', 0)
                     logger.info(f"✅ [LessonGen] Research complete in {research_time:.1f}s: {research_summary}")
+                    if source_status:
+                        logger.info(f"📊 [LessonGen] Source availability: {source_status.get_summary()}")
                 else:
                     logger.warning("⚠️ [LessonGen] Research failed or returned no data - proceeding with AI-only generation")
             else:
@@ -635,48 +887,122 @@ class LessonGenerationService:
             # Step 2: Route to appropriate generator (with research context)
             # Helper function to extract source attribution from research data
             def extract_source_attribution(research_data):
+                """
+                PHASE 2.6: Extract source attribution including YouTube metadata.
+
+                Returns comprehensive attribution dict with:
+                - official_docs: List of official doc URLs
+                - stackoverflow: List of SO question URLs
+                - github: List of GitHub repo URLs
+                - devto: List of Dev.to article URLs with tier info
+                - youtube_videos: List of video metadata with transcript & source info
+
+                YouTube metadata includes:
+                - video_id: YouTube video ID
+                - title: Video title
+                - url: YouTube video URL
+                - embed_url: Embeddable URL
+                - duration_minutes: Video length
+                - has_transcript: Whether video has accessible transcripts
+                - transcript_source: 'youtube' (native) or 'groq' (generated)
+                - channel: Channel name
+                - view_count: Video views
+                - source: 'youtube' or 'dailymotion' (if fallback)
+                - fallback_reason: Reason for fallback (if applicable)
+                """
                 if not research_data or 'sources' not in research_data:
                     return {}
+
                 sources = research_data['sources']
                 attribution = {}
+
                 # Official docs
                 doc = sources.get('official_docs')
                 if doc and isinstance(doc, dict) and doc.get('url'):
                     attribution['official_docs'] = [doc['url']]
+
                 # Stack Overflow
                 so = sources.get('stackoverflow_answers', [])
                 attribution['stackoverflow'] = [a['question_url'] for a in so if a.get('question_url')]
+
                 # GitHub
                 gh = sources.get('github_examples', [])
                 attribution['github'] = [g['repo_url'] for g in gh if g.get('repo_url')]
-                # Dev.to
+
+                # Dev.to (with tier info)
                 dev = sources.get('dev_articles', [])
-                attribution['devto'] = [d['url'] for d in dev if d.get('url')]
+                devto_list = []
+                for d in dev:
+                    if d.get('url'):
+                        devto_item = {
+                            'url': d['url'],
+                            'title': d.get('title', ''),
+                            'tier': d.get('source_tier')  # 365 or 730 days
+                        }
+                        devto_list.append(devto_item)
+                attribution['devto'] = devto_list
+
+                # YouTube videos (NEW - PHASE 2.6)
+                youtube_videos = sources.get('youtube_videos')
+                if youtube_videos:
+                    video_source = research_data.get('video_source', 'youtube')
+                    fallback_reason = research_data.get('video_fallback_reason')
+
+                    youtube_item = {
+                        'video_id': youtube_videos.get('video_id'),
+                        'title': youtube_videos.get('title', ''),
+                        'url': youtube_videos.get('video_url'),
+                        'embed_url': youtube_videos.get('embed_url'),
+                        'duration_minutes': youtube_videos.get('duration_minutes', 0),
+                        'channel': youtube_videos.get('channel', ''),
+                        'view_count': youtube_videos.get('view_count', 0),
+                        'published_at': youtube_videos.get('published_at'),
+                        'thumbnail_url': youtube_videos.get('thumbnail_url'),
+                        # Transcript availability
+                        'has_transcript': youtube_videos.get('has_transcript', False),
+                        'caption_filter_matched': youtube_videos.get('caption_filter_matched', False),
+                        # Source tracking (youtube vs dailymotion fallback)
+                        'source': video_source,
+                        'fallback_reason': fallback_reason,  # e.g., 'youtube_not_available', None
+                    }
+                    attribution['youtube_videos'] = [youtube_item]
+
                 return attribution
 
-            # Route to appropriate generator, then inject source_attribution
+            # Step 3: Inject enhanced metadata and source attribution (PHASE 2.6-2.7)
+            def inject_enhanced_metadata(result_dict, research_data, source_status_obj):
+                """Inject source attribution and research metadata into lesson result"""
+                result_dict['source_attribution'] = extract_source_attribution(research_data)
+                result_dict['research_metadata'] = build_research_metadata(
+                    research_data,
+                    source_status_obj,
+                    'multi_source' if research_data else 'ai_only'
+                )
+                return result_dict
+
+            # Route to appropriate generator, then inject enhanced metadata
             if request.learning_style == 'hands_on':
                 logger.info(f"🎓 [LessonGen] Routing to hands-on lesson generator for: {request.step_title}")
                 result = await self._generate_hands_on_lesson(request, research_data)
-                result['source_attribution'] = extract_source_attribution(research_data)
+                result = inject_enhanced_metadata(result, research_data, source_status)
                 logger.info(f"🎓 [LessonGen] Hands-on lesson generated for: {request.step_title}")
                 return result
             elif request.learning_style == 'video':
                 logger.info(f"🎓 [LessonGen] Routing to video lesson generator for: {request.step_title}")
                 result = await self._generate_video_lesson(request, research_data)
-                result['source_attribution'] = extract_source_attribution(research_data)
+                result = inject_enhanced_metadata(result, research_data, source_status)
                 logger.info(f"🎓 [LessonGen] Video lesson generated for: {request.step_title}")
                 return result
             elif request.learning_style == 'reading':
                 logger.info(f"🎓 [LessonGen] Routing to reading lesson generator for: {request.step_title}")
                 result = await self._generate_reading_lesson(request, research_data)
-                result['source_attribution'] = extract_source_attribution(research_data)
+                result = inject_enhanced_metadata(result, research_data, source_status)
                 logger.info(f"🎓 [LessonGen] Reading lesson generated for: {request.step_title}")
                 return result
             elif request.learning_style == 'mixed':
                 logger.info(f"🎓 [LessonGen] Routing to mixed lesson generator for: {request.step_title}")
                 result = await self._generate_mixed_lesson(request, research_data)
-                result['source_attribution'] = extract_source_attribution(research_data)
+                result = inject_enhanced_metadata(result, research_data, source_status)
                 logger.info(f"🎓 [LessonGen] Mixed lesson generated for: {request.step_title}")
                 return result
             else:
@@ -690,39 +1016,140 @@ class LessonGenerationService:
     # MULTI-SOURCE RESEARCH (NEW!)
     # ========================================
     
-    async def _run_research(self, request: LessonRequest) -> Optional[Dict[str, Any]]:
+    async def _run_research(
+        self,
+        request: LessonRequest
+    ) -> tuple[Optional[Dict[str, Any]], ResearchSourceStatus]:
         """
-        Run multi-source research BEFORE lesson generation.
-        
+        Run multi-source research BEFORE lesson generation with source tracking.
+
+        PHASE 2.3: Tracks source availability for compensation calculation.
+
         Fetches from:
         - Official documentation (Python.org, MDN, React.dev, etc.)
-        - Stack Overflow (top-voted answers)
+        - Stack Overflow (top-voted answers with compensation)
         - GitHub (production code examples)
-        - Dev.to (community articles)
-        
-        Returns research data or None if failed.
+        - Dev.to (community articles with 2-tier fallback)
+        - YouTube (videos with DailyMotion fallback)
+
+        Returns:
+            Tuple of (research_data, source_status)
+            - research_data: Dict with all research sources or None if failed
+            - source_status: ResearchSourceStatus tracking availability and compensation
         """
+        # Initialize source tracking
+        source_status = ResearchSourceStatus()
+
         try:
             # Determine category and language from request
             category = request.category or self._infer_category(request.step_title)
             language = request.programming_language or self._infer_language(request.step_title)
-            
+
             logger.debug(f"   Category: {category}, Language: {language}")
-            
-            # Run async research (now properly await it)
+            logger.info(f"📊 Starting research with source tracking for: {request.step_title}")
+
+            # PHASE 2.8: Two-pass research with SO compensation
+            # ====================================================
+            # Pass 1: Initial research with base SO count (5)
+            logger.info(f"🔄 Pass 1: Initial research with base SO count (5 answers)")
             research_data = await self.research_engine.research_topic(
                 topic=request.step_title,
                 category=category,
-                language=language
+                language=language,
+                include_videos=True,
+                so_compensation_count=None  # Use base (5)
             )
-            
-            return research_data
-        
+
+            if not research_data:
+                logger.warning(f"⚠️ Research returned no data")
+                return None, source_status
+
+            # Track source availability based on Pass 1 results
+            sources = research_data.get('sources', {})
+
+            # Check Official Docs
+            if sources.get('official_docs'):
+                source_status.mark_source_available('official_docs')
+                logger.debug(f"   ✓ Official Docs available")
+            else:
+                source_status.mark_source_unavailable('official_docs')
+                logger.debug(f"   ✗ Official Docs unavailable")
+
+            # Check GitHub
+            if sources.get('github_examples'):
+                source_status.mark_source_available('github')
+                logger.debug(f"   ✓ GitHub available ({len(sources['github_examples'])} examples)")
+            else:
+                source_status.mark_source_unavailable('github')
+                logger.debug(f"   ✗ GitHub unavailable")
+
+            # Check Dev.to (track tier used)
+            if sources.get('dev_articles'):
+                devto_tier = None
+                # Try to get tier from first article metadata
+                if sources['dev_articles'] and isinstance(sources['dev_articles'][0], dict):
+                    devto_tier = sources['dev_articles'][0].get('source_tier')
+                source_status.mark_source_available('devto', tier_info=devto_tier)
+                logger.debug(f"   ✓ Dev.to available ({len(sources['dev_articles'])} articles, tier: {devto_tier}d)")
+            else:
+                source_status.mark_source_unavailable('devto')
+                logger.debug(f"   ✗ Dev.to unavailable")
+
+            # Check YouTube/DailyMotion
+            if sources.get('youtube_videos'):
+                video_source = research_data.get('video_source', 'unknown')
+                source_status.mark_source_available('youtube', tier_info=video_source)
+                logger.debug(f"   ✓ Video available (source: {video_source})")
+            else:
+                source_status.mark_source_unavailable('youtube')
+                logger.debug(f"   ✗ Video unavailable")
+
+            # Calculate Stack Overflow compensation based on unavailable sources
+            so_compensation_count = source_status.calculate_so_compensation()
+            logger.info(f"📊 SO Compensation calculated: {so_compensation_count} answers")
+
+            # Pass 2: If compensation needed, re-run research with compensated SO count (PHASE 2.8)
+            if so_compensation_count > 5:
+                logger.info(
+                    f"🔄 Pass 2: Re-running research with SO compensation "
+                    f"({so_compensation_count - 5} missing sources → {so_compensation_count} answers)"
+                )
+
+                compensated_research = await self.research_engine.research_topic(
+                    topic=request.step_title,
+                    category=category,
+                    language=language,
+                    include_videos=False,  # Skip videos in Pass 2 (already have them)
+                    so_compensation_count=so_compensation_count
+                )
+
+                if compensated_research:
+                    # Replace SO answers with compensated version
+                    compensated_so = compensated_research.get('sources', {}).get('stackoverflow_answers', [])
+                    if compensated_so:
+                        research_data['sources']['stackoverflow_answers'] = compensated_so
+                        logger.info(
+                            f"✅ Pass 2 complete: Fetched {len(compensated_so)} SO answers "
+                            f"({so_compensation_count - 5} bonus)"
+                        )
+                    else:
+                        logger.warning(f"⚠️ Pass 2: SO compensation fetch returned no answers")
+                else:
+                    logger.warning(f"⚠️ Pass 2: SO compensation research failed")
+            else:
+                logger.info(f"✅ No compensation needed - all sources available")
+
+            # Log source availability summary
+            logger.info(f"📊 Research Sources: {source_status.get_summary()}")
+            logger.info(f"📊 Skipped sources: {', '.join(source_status.get_skipped_sources()) if source_status.get_skipped_sources() else 'None'}")
+
+            return research_data, source_status
+
         except Exception as e:
             logger.error(f"❌ Research failed: {e}")
             import traceback
             logger.debug(f"   Traceback: {traceback.format_exc()}")
-            return None
+            return None, source_status
     
     def _infer_category(self, topic: str) -> str:
         """
@@ -902,19 +1329,9 @@ class LessonGenerationService:
         # Add metadata
         lesson_data['lesson_type'] = 'hands_on'
         lesson_data['estimated_duration'] = self._calculate_lesson_duration(45, request.user_profile)  # Time-aware duration
-        
-        # Add research metadata if available
-        if research_data:
-            lesson_data['research_metadata'] = {
-                'research_time': research_data.get('research_time_seconds', 0),
-                'sources_used': research_data.get('summary', ''),
-                'source_type': 'multi_source'
-            }
-        else:
-            lesson_data['research_metadata'] = {
-                'source_type': 'ai_only'
-            }
-        
+
+        # NOTE: research_metadata is injected by inject_enhanced_metadata() in generate_lesson()
+
         logger.info(f"✅ Hands-on lesson generated: {len(lesson_data.get('exercises', []))} exercises")
         
         return lesson_data
@@ -1111,13 +1528,7 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
                 'estimated_duration': video_data.get('duration_minutes', 15)
             }
             
-            # Add research metadata even if no transcript
-            if research_data:
-                lesson_data['research_metadata'] = {
-                    'research_time': research_data.get('research_time_seconds', 0),
-                    'sources_used': research_data.get('summary', ''),
-                    'source_type': 'multi_source'
-                }
+            # NOTE: research_metadata is injected by inject_enhanced_metadata() in generate_lesson()
 
             # Generate unique lesson description
             lesson_data['summary'] = await self._generate_lesson_description(request, lesson_data['summary'])
@@ -1164,18 +1575,8 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
                 request.user_profile
             )
         
-        # Add research metadata
-        if research_data:
-            lesson_data['research_metadata'] = {
-                'research_time': research_data.get('research_time_seconds', 0),
-                'sources_used': research_data.get('summary', ''),
-                'source_type': 'multi_source'
-            }
-        else:
-            lesson_data['research_metadata'] = {
-                'source_type': 'ai_only'
-            }
-        
+        # NOTE: research_metadata is injected by inject_enhanced_metadata() in generate_lesson()
+
         logger.info(f"✅ Video lesson generated: {video_data['title'][:50]}... ({lesson_data['estimated_duration']} min)")
         
         return lesson_data
@@ -1262,17 +1663,7 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
         lesson_data['lesson_type'] = 'reading'
         lesson_data['estimated_duration'] = self._calculate_lesson_duration(30, request.user_profile)  # Time-aware duration
 
-        # Add research metadata
-        if research_data:
-            lesson_data['research_metadata'] = {
-                'research_time': research_data.get('research_time_seconds', 0),
-                'sources_used': research_data.get('summary', ''),
-                'source_type': 'multi_source'
-            }
-        else:
-            lesson_data['research_metadata'] = {
-                'source_type': 'ai_only'
-            }
+        # NOTE: research_metadata is injected by inject_enhanced_metadata() in generate_lesson()
 
         logger.info(f"✅ Reading lesson generated: {len(lesson_data.get('content', ''))} characters")
 
@@ -1717,17 +2108,7 @@ Output as JSON with keys: summary, key_concepts[], timestamps[]"""
                 request.user_profile
             )
 
-        # Add research metadata
-        if research_data:
-            lesson_data['research_metadata'] = {
-                'research_time': research_data.get('research_time_seconds', 0),
-                'sources_used': research_data.get('summary', ''),
-                'source_type': 'multi_source'
-            }
-        else:
-            lesson_data['research_metadata'] = {
-                'source_type': 'ai_only'
-            }
+        # NOTE: research_metadata is injected by inject_enhanced_metadata() in generate_lesson()
 
         logger.info(f"✅ Mixed lesson generated successfully")
 

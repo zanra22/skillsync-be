@@ -70,6 +70,8 @@ class TranscriptService:
         Returns:
             True if transcript is available, False otherwise
         """
+        print(f"   [has_transcript] CALLED for {video_id}", flush=True)
+
         # RATE LIMITING: Prevent 429 errors from rapid transcript checks
         # Each call to YouTubeTranscriptApi.get_transcript() hits YouTube's caption endpoint
         # Without rate limiting, checking 10 videos = 10 rapid requests = 429 error
@@ -80,6 +82,7 @@ class TranscriptService:
         if time_since_last_call < 1:
             wait_time = 1 - time_since_last_call
             logger.debug(f"⏳ Rate limiting has_transcript(): waiting {wait_time:.2f}s...")
+            print(f"   [has_transcript] Rate limiting: waiting {wait_time:.2f}s", flush=True)
             time.sleep(wait_time)
 
         self.last_youtube_call = time.time()
@@ -88,16 +91,21 @@ class TranscriptService:
             from youtube_transcript_api import YouTubeTranscriptApi
             # Actually try to fetch transcript (not just list)
             # This catches XML parsing errors before we commit to the video
+            print(f"   [has_transcript] Attempting YouTubeTranscriptApi.get_transcript() for {video_id}...", flush=True)
             transcript = YouTubeTranscriptApi.get_transcript(
                 video_id,
                 languages=['en', 'en-US', 'en-GB']  # English variants
             )
 
             # Verify we got some data
-            return len(transcript) > 0
+            result = len(transcript) > 0
+            print(f"   [has_transcript] SUCCESS: Got {len(transcript)} entries, returning {result}", flush=True)
+            return result
 
         except Exception as e:
             # If any error (XML parse, not found, 429 rate limit, etc), assume no transcript
+            error_type = type(e).__name__
+            print(f"   [has_transcript] FAILED: {error_type} - {str(e)[:100]}", flush=True)
             logger.debug(f"   No accessible transcript for {video_id}: {str(e)[:50]}")
             return False
 

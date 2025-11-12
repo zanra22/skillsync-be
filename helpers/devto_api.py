@@ -47,33 +47,108 @@ class DevToAPIService:
         tag: Optional[str] = None,
         min_reactions: int = 20,
         max_results: int = 5,
-        top_period: int = 7
-    ) -> List[Dict]:
+        top_period: int = None,
+        enable_tier_fallback: bool = True
+    ) -> tuple[List[Dict], Optional[int]]:
         """
-        Search Dev.to articles
-        
+        Search Dev.to articles with 2-tier time period fallback (PHASE 2 IMPLEMENTATION 2.1).
+
+        PHASE 2.1 CHANGE: Implements 2-tier fallback strategy (365 → 730 days).
+        Removed 7-day tier. Returns tuple: (results, tier_used).
+
+        Tier Fallback Strategy:
+        - Tier 1: top_period=365 (last 1 year) - broader selection
+        - Tier 2: top_period=730 (last 2 years) - if Tier 1 returns < 2 results
+
         Args:
             query: Search query (optional if tag is provided)
             tag: Tag to filter by (e.g., 'python', 'javascript', 'react')
             min_reactions: Minimum number of positive reactions (default: 20)
             max_results: Maximum results to return (default: 5)
-            top_period: Number of days to look back for top articles (default: 7)
-        
+            top_period: Number of days to look back (default: None - uses tier fallback)
+            enable_tier_fallback: Enable automatic tier fallback (default: True)
+
         Returns:
-            List of article dictionaries
+            Tuple of (results, tier_used_in_days) where tier_used is None if all failed
+        """
+        try:
+            # Determine which tiers to try
+            tiers = []
+            if top_period is not None:
+                # User specified explicit period, use it as single tier
+                tiers = [top_period]
+                logger.debug(f"Using explicit top_period: {top_period} days")
+            elif enable_tier_fallback:
+                # PHASE 2.1: Use 2-tier fallback (365 → 730 days)
+                tiers = [365, 730]  # 1 year, 2 years
+                logger.info(f"🔄 Dev.to 2-tier fallback enabled: {tiers}")
+            else:
+                # Fallback disabled, use default
+                tiers = [365]
+                logger.debug(f"Tier fallback disabled, using default: {tiers[0]} days")
+
+            # Try each tier in order
+            for tier_days in tiers:
+                logger.info(f"🔍 Dev.to Tier: Searching {tag or query} from last {tier_days} days...")
+                results, tier_used = await self._search_with_period(
+                    query=query,
+                    tag=tag,
+                    min_reactions=min_reactions,
+                    max_results=max_results,
+                    top_period=tier_days
+                )
+
+                if results and len(results) >= 2:
+                    logger.info(f"✅ Dev.to: Found {len(results)} articles in {tier_days}-day tier")
+                    print(f"   ✅ [Dev.to] Found {len(results)} in {tier_days}-day tier", flush=True)
+                    return results, tier_used
+
+                logger.warning(f"⚠️ Dev.to: <2 results in {tier_days}-day tier, trying next...")
+                print(f"   ⚠️ [Dev.to] <2 results in {tier_days}-day tier, trying next...", flush=True)
+
+            # All tiers exhausted
+            logger.warning(f"❌ Dev.to: No articles found in any tier for: {tag or query}")
+            print(f"   ❌ [Dev.to] All tiers exhausted - marking unavailable", flush=True)
+            return [], None
+
+        except Exception as e:
+            logger.error(f"Error in Dev.to search with tier fallback: {str(e)}")
+            print(f"   ❌ [Dev.to] Exception: {type(e).__name__}: {str(e)[:100]}", flush=True)
+            return [], None
+
+    async def _search_with_period(
+        self,
+        query: Optional[str] = None,
+        tag: Optional[str] = None,
+        min_reactions: int = 20,
+        max_results: int = 5,
+        top_period: int = 365
+    ) -> tuple[List[Dict], Optional[int]]:
+        """
+        Execute actual API call with given time period (PHASE 2.1 NEW METHOD).
+
+        Args:
+            query: Search query
+            tag: Tag to filter by
+            min_reactions: Minimum reactions threshold
+            max_results: Maximum results to return
+            top_period: Time period in days
+
+        Returns:
+            Tuple of (results, tier_used_in_days) where tier_used is top_period if successful
         """
         try:
             params = {
                 'per_page': 30,  # Fetch more, filter later
                 'top': top_period  # Top articles in last N days
             }
-            
+
             if tag:
                 params['tag'] = tag
-            
+
             if query:
                 params['q'] = query
-            
+
             async with httpx.AsyncClient(timeout=self.timeout, headers=self.headers) as client:
                 response = await client.get(
                     f"{self.BASE_URL}/articles",
@@ -81,39 +156,39 @@ class DevToAPIService:
                 )
                 response.raise_for_status()
                 articles = response.json()
-            
+
             # Filter by minimum reactions
             filtered_articles = [
                 article for article in articles
                 if article.get('positive_reactions_count', 0) >= min_reactions
             ]
-            
+
             # Sort by reactions (highest first)
             sorted_articles = sorted(
                 filtered_articles,
                 key=lambda x: x.get('positive_reactions_count', 0),
                 reverse=True
             )
-            
+
             # Format results
             results = []
             for article in sorted_articles[:max_results]:
                 formatted_article = await self._format_article(article)
                 if formatted_article:
                     results.append(formatted_article)
-            
-            logger.info(f"✓ Found {len(results)} Dev.to articles for: {tag or query}")
-            return results
-            
+
+            logger.debug(f"✓ Found {len(results)} Dev.to articles for: {tag or query} (tier: {top_period}d)")
+            return results, top_period
+
         except httpx.TimeoutException:
-            logger.error(f"Timeout searching Dev.to for: {tag or query}")
-            return []
+            logger.debug(f"Timeout searching Dev.to for: {tag or query} (tier: {top_period}d)")
+            return [], None
         except httpx.HTTPError as e:
-            logger.error(f"HTTP error searching Dev.to: {str(e)}")
-            return []
+            logger.debug(f"HTTP error searching Dev.to (tier: {top_period}d): {str(e)}")
+            return [], None
         except Exception as e:
-            logger.error(f"Error searching Dev.to: {str(e)}")
-            return []
+            logger.debug(f"Error searching Dev.to (tier: {top_period}d): {str(e)}")
+            return [], None
     
     async def _format_article(self, article: Dict) -> Optional[Dict]:
         """

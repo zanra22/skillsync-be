@@ -218,11 +218,15 @@ class YouTubeService:
                     # Even though caption filter worked, verify the transcript is actually accessible
                     # This catches the case where creator has subtitles but disabled transcripts
                     logger.debug(f"   🔍 Caption filter matched, verifying transcript accessibility...")
+                    print(f"   [search_and_rank] Verifying transcript for {video_id}...", flush=True)
                     has_transcript = self.transcript_service.has_transcript(video_id)
+                    print(f"   [search_and_rank] has_transcript({video_id}) returned: {has_transcript}", flush=True)
                     if has_transcript:
                         logger.debug(f"   ✅ Verified: Video has accessible transcripts")
+                        print(f"   ✅ [search_and_rank] Video {video_id} verified: HAS TRANSCRIPTS", flush=True)
                     else:
                         logger.debug(f"   ⚠️ Video has captions but transcripts are disabled (creator restriction)")
+                        print(f"   ⚠️ [search_and_rank] Video {video_id}: Captions exist but transcripts DISABLED", flush=True)
                 else:
                     # Fallback search: skip transcript checking to avoid rate limiting
                     # These videos don't have captions anyway
@@ -337,14 +341,15 @@ class YouTubeService:
 
         return minutes or 10  # Default to 10 if parsing fails
 
-    def get_transcript(self, video_id: str) -> Optional[str]:
+    def get_transcript(self, video_id: str, skip_groq_fallback: bool = False) -> Optional[str]:
         """
         Get transcript for a video (with fallback).
 
         Args:
             video_id: YouTube video ID
+            skip_groq_fallback: If True, don't use Groq transcription (for caption-filtered videos)
 
         Returns:
             Transcript text or None
         """
-        return self.transcript_service.get_transcript(video_id)
+        return self.transcript_service.get_transcript(video_id, skip_groq_fallback=skip_groq_fallback)

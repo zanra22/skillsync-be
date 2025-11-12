@@ -32,6 +32,7 @@ from .official_docs_scraper import OfficialDocsScraperService
 from .stackoverflow_api import StackOverflowAPIService
 from .github_api import GitHubAPIService
 from .devto_api import DevToAPIService
+from .video_source_fallback import VideoSourceFallbackService
 
 logger = logging.getLogger(__name__)
 
@@ -40,35 +41,48 @@ class MultiSourceResearchEngine:
     """
     Coordinates research from multiple sources to verify content quality.
     Uses dedicated service classes for each data source.
+
+    PHASE 2: Adds YouTube video source with DailyMotion fallback.
     """
-    
+
     # Rate limits
     MAX_CONCURRENT_REQUESTS = 5
     REQUEST_TIMEOUT = 30  # seconds
-    
-    def __init__(self):
-        """Initialize research engine with all service classes"""
+
+    def __init__(self, youtube_service=None, dailymotion_service=None):
+        """
+        Initialize research engine with all service classes.
+
+        Args:
+            youtube_service: Optional YouTubeService instance
+            dailymotion_service: Optional DailyMotionAPIService instance
+        """
         self.github_token = os.getenv('GITHUB_TOKEN')  # Optional but recommended
         self.stackoverflow_key = os.getenv('STACKOVERFLOW_API_KEY')  # Optional - increases quota
-        
+
         # Initialize all research services
         self.docs_scraper = OfficialDocsScraperService()
         self.stackoverflow_service = StackOverflowAPIService(api_key=self.stackoverflow_key)
         self.github_service = GitHubAPIService(token=self.github_token)
         self.devto_service = DevToAPIService()
-        
+
+        # Initialize video services (lazy loaded if not provided)
+        self.youtube_service = youtube_service
+        self.dailymotion_service = dailymotion_service
+        self.video_fallback_service = None
+
         if not self.github_token:
             logger.warning(
                 "⚠️ GITHUB_TOKEN not set - GitHub API rate limited to 60 requests/hour. "
                 "Set token for 5000 requests/hour."
             )
-        
+
         if not self.stackoverflow_key:
             logger.info(
                 "ℹ️ STACKOVERFLOW_API_KEY not set - using IP-based quota (10,000 req/day). "
                 "Register app at stackapps.com for separate quota."
             )
-        
+
         logger.info("✓ Multi-Source Research Engine initialized with all services")
     
     async def research_topic(
@@ -76,51 +90,71 @@ class MultiSourceResearchEngine:
         topic: str,
         category: str = 'general',
         language: Optional[str] = None,
-        max_results: int = 5
+        max_results: int = 5,
+        include_videos: bool = True,
+        so_compensation_count: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Research topic from all sources concurrently.
-        
+
+        PHASE 2: Adds optional YouTube video source with DailyMotion fallback.
+        PHASE 2.5: Supports dynamic Stack Overflow compensation (5-8 answers).
+
         Args:
             topic: Topic to research (e.g., "Python Variables", "SQL Joins")
             category: Topic category for official docs (python, javascript, sql, general, etc.)
             language: Programming language for GitHub code search (None = search all languages)
-            max_results: Max results per source
-            
+            max_results: Max results per source (used for non-SO sources)
+            include_videos: If True, fetch YouTube videos with DailyMotion fallback
+            so_compensation_count: Stack Overflow answer count (5-8 for compensation)
+                - None or 5: Base count (all sources available)
+                - 6-8: Compensated count (missing sources)
+
         Returns:
             Dict with research data from all sources
         """
         logger.info(f"🔍 Starting multi-source research for: {topic}")
         start_time = datetime.now()
-        
+
+        # Use provided SO compensation count or default to base (5)
+        so_count = so_compensation_count or 5
+        if so_count:
+            logger.info(f"   📊 Stack Overflow count: {so_count} answers (compensation: {so_count - 5} missing sources)")
+
         # Create async tasks for all sources
         tasks = [
             self._fetch_official_docs(topic, category),
-            self._fetch_stackoverflow(topic, max_results),
+            self._fetch_stackoverflow(topic, so_count),  # Use compensation count
             self._fetch_github_code(topic, language, max_results),
             self._fetch_dev_articles(topic, max_results),
         ]
-        
+
+        # Add video fetching if enabled
+        if include_videos:
+            tasks.append(self._fetch_videos(topic))
+
         # Execute all tasks concurrently
         try:
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            
+
             # Parse results (handle exceptions)
             official_docs = results[0] if not isinstance(results[0], Exception) else None
             stackoverflow = results[1] if not isinstance(results[1], Exception) else []
             github_code = results[2] if not isinstance(results[2], Exception) else []
             dev_articles = results[3] if not isinstance(results[3], Exception) else []
-            
+            video_data = results[4] if include_videos and not isinstance(results[4], Exception) else None
+
         except Exception as e:
             logger.error(f"❌ Research failed: {e}")
             official_docs = None
             stackoverflow = []
             github_code = []
             dev_articles = []
-        
+            video_data = None
+
         # Calculate research time
         elapsed = (datetime.now() - start_time).total_seconds()
-        
+
         research_data = {
             'topic': topic,
             'category': category,
@@ -132,17 +166,26 @@ class MultiSourceResearchEngine:
                 'dev_articles': dev_articles,
             },
             'summary': self._generate_research_summary(
-                official_docs, stackoverflow, github_code, dev_articles
+                official_docs, stackoverflow, github_code, dev_articles, video_data
             )
         }
-        
+
+        # Add video data if fetched
+        if include_videos and video_data:
+            research_data['sources']['youtube_videos'] = video_data['video']
+            research_data['video_source'] = video_data['source']
+            research_data['video_fallback_reason'] = video_data.get('fallback_reason')
+
+        # Build video info string (avoid nested f-strings with backslashes)
+        video_info = f', {video_data["source"]} video' if video_data else ''
         logger.info(
             f"✅ Research complete in {elapsed:.1f}s: "
             f"{len(stackoverflow)} SO answers, "
             f"{len(github_code)} GitHub examples, "
             f"{len(dev_articles)} Dev.to articles"
+            f"{video_info}"
         )
-        
+
         return research_data
     
     async def _fetch_official_docs(
@@ -286,24 +329,28 @@ class MultiSourceResearchEngine:
         max_results: int = 5
     ) -> List[Dict]:
         """
-        Fetch Dev.to community articles using DevToAPIService.
-        
+        Fetch Dev.to community articles using DevToAPIService with 2-tier fallback.
+
+        PHASE 2.1: Implements 2-tier fallback strategy (365 → 730 days)
+        - search_articles() now returns tuple: (results, tier_used)
+
         Returns:
             List of dicts with article data
         """
         try:
             logger.debug(f"   Fetching Dev.to articles...")
-            
+
             # Convert topic to tag (e.g., "Python Variables" → "python")
             tag = topic.lower().split()[0] if ' ' in topic else topic.lower()
-            
-            results = await self.devto_service.search_articles(
+
+            # PHASE 2.1: New return type is tuple (results, tier_used)
+            results, tier_used = await self.devto_service.search_articles(
                 tag=tag,
                 min_reactions=20,
                 max_results=max_results,
-                top_period=7
+                enable_tier_fallback=True  # Enable 2-tier fallback
             )
-            
+
             # Format for consistency
             parsed = []
             for article in results:
@@ -316,55 +363,116 @@ class MultiSourceResearchEngine:
                     'reading_time_minutes': article['reading_time_minutes'],
                     'tags': article['tags'],
                     'published_at': article['published_at'],
-                    'user': article['author']['name']
+                    'user': article['author']['name'],
+                    'source_tier': tier_used  # Track which tier was used
                 })
-            
-            logger.debug(f"   ✓ Found {len(parsed)} Dev.to articles")
+
+            if tier_used:
+                logger.debug(f"   ✓ Found {len(parsed)} Dev.to articles (tier: {tier_used} days)")
+            else:
+                logger.debug(f"   ⚠️ No Dev.to articles found (all tiers exhausted)")
             return parsed
-                
+
         except Exception as e:
             logger.error(f"❌ Dev.to API error: {e}")
             return []
+
+    async def _fetch_videos(
+        self,
+        topic: str
+    ) -> Optional[Dict]:
+        """
+        Fetch tutorial video with 2-tier fallback (YouTube → DailyMotion).
+
+        PHASE 2.2: YouTube primary, DailyMotion fallback when YouTube unavailable.
+
+        Returns:
+            Dict with video metadata, source, and fallback reason or None
+        """
+        try:
+            logger.debug(f"   Fetching tutorial videos...")
+
+            # Initialize video fallback service if needed
+            if not self.video_fallback_service and self.youtube_service and self.dailymotion_service:
+                self.video_fallback_service = VideoSourceFallbackService(
+                    self.youtube_service,
+                    self.dailymotion_service
+                )
+
+            if not self.video_fallback_service:
+                logger.debug(f"   ⚠️ Video services not available (youtube_service or dailymotion_service not provided)")
+                return None
+
+            # Search with fallback
+            video, source, fallback_reason = await self.video_fallback_service.search_with_fallback(
+                topic=topic,
+                max_results=3
+            )
+
+            if video:
+                logger.debug(f"   ✓ Found {source} video: {video['title'][:40]}")
+                return {
+                    'video': video,
+                    'source': source,
+                    'fallback_reason': fallback_reason
+                }
+            else:
+                logger.debug(f"   ⚠️ No videos found (all sources exhausted)")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Video fetch error: {e}")
+            return None
     
     def _generate_research_summary(
         self,
         official_docs: Optional[Dict],
         stackoverflow: List[Dict],
         github: List[Dict],
-        dev_articles: List[Dict]
+        dev_articles: List[Dict],
+        video_data: Optional[Dict] = None
     ) -> str:
         """
         Generate human-readable research summary.
+
+        PHASE 2: Includes video source in summary.
         """
         parts = []
-        
+
         if official_docs:
             parts.append(f"✓ Official documentation: {official_docs['source']}")
-        
+
         if stackoverflow:
             total_views = sum(a['view_count'] for a in stackoverflow)
             parts.append(
                 f"✓ {len(stackoverflow)} Stack Overflow answers "
                 f"({total_views:,} views)"
             )
-        
+
         if github:
             total_stars = sum(e['stars'] for e in github)
             parts.append(
                 f"✓ {len(github)} GitHub examples "
                 f"({total_stars:,} stars)"
             )
-        
+
         if dev_articles:
             total_reactions = sum(a['reactions'] for a in dev_articles)
             parts.append(
                 f"✓ {len(dev_articles)} Dev.to articles "
                 f"({total_reactions} reactions)"
             )
-        
+
+        if video_data:
+            source = video_data.get('source', 'unknown').capitalize()
+            title = video_data.get('video', {}).get('title', 'Tutorial')[:40]
+            parts.append(
+                f"✓ {source} video: {title}"
+            )
+
         if not parts:
             return "⚠️ No research data available"
-        
+
         return "\n".join(parts)
     
     def format_for_ai_prompt(self, research_data: Dict) -> str:
@@ -426,19 +534,32 @@ class MultiSourceResearchEngine:
                     f"   Reactions: {article['reactions']} | {article['reading_time_minutes']} min read\n"
                     f"   URL: {article['url']}\n"
                 )
-        
+
+        # 5. YouTube/DailyMotion Videos (PHASE 2)
+        if sources.get('youtube_videos'):
+            video_source = research_data.get('video_source', 'unknown').capitalize()
+            video = sources['youtube_videos']
+            prompt_parts.append(
+                f"\nTutorial Video ({video_source}):\n"
+                f"Title: {video.get('title', 'N/A')}\n"
+                f"Duration: {video.get('duration_minutes', 'N/A')} minutes\n"
+                f"Views: {video.get('view_count', 0):,}\n"
+                f"URL: {video.get('video_url', 'N/A')}\n"
+            )
+
         prompt_parts.append(
             "\n=== INSTRUCTIONS ===\n"
             "1. Verify all code examples against official documentation\n"
             "2. Use Stack Overflow solutions for real-world patterns\n"
             "3. Reference GitHub examples for production-quality code\n"
             "4. Incorporate community best practices from Dev.to\n"
-            "5. Cite sources when using specific examples\n"
-            "6. Prioritize official documentation for correctness\n"
-            "7. Ensure all code snippets are accurate and tested\n"
-            "8. Explain WHY solutions work, not just HOW\n"
+            "5. Use video tutorial for visual explanations when available\n"
+            "6. Cite sources when using specific examples\n"
+            "7. Prioritize official documentation for correctness\n"
+            "8. Ensure all code snippets are accurate and tested\n"
+            "9. Explain WHY solutions work, not just HOW\n"
         )
-        
+
         return "\n".join(prompt_parts)
 
 
