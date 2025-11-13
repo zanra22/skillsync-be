@@ -518,10 +518,16 @@ class LessonGenerationService:
         user_time_commitment: float = 5.0,
     ) -> List[Dict[str, Any]]:
         """
-        Generate structured lesson plan using AI.
+        Generate structured lesson plan using AI (with caching).
 
         Creates a curriculum breaking down a module into specific,
         teachable lessons with optimized YouTube search queries.
+
+        Caching Strategy (Phase A.2):
+        - Same (module_title, difficulty, learning_pace, time_commitment) = cached structure
+        - If cached structure exists and has good approval status, reuse it
+        - Otherwise, generate new structure via AI
+        - Foundation for future community voting on lesson structures
 
         Args:
             module_title: e.g., "Introduction to Python"
@@ -545,6 +551,37 @@ class LessonGenerationService:
             ]
         """
         logger.info(f"📚 Generating lesson structure for: {module_title} ({module_difficulty})")
+
+        # STEP 1: Check cache first (Phase A.2 - Caching)
+        from asgiref.sync import sync_to_async
+        from lessons.models import LessonStructure
+        from django.utils import timezone
+
+        content_hash = LessonStructure.generate_content_hash(
+            module_title, module_difficulty, user_learning_pace, user_time_commitment
+        )
+        logger.debug(f"  🔍 Cache lookup: {content_hash}")
+
+        # Try to get cached structure
+        cached_structure = await sync_to_async(LessonStructure.objects.filter)(
+            content_hash=content_hash
+        )
+        cached_structure = await sync_to_async(lambda: list(cached_structure))()
+
+        if cached_structure:
+            structure_record = cached_structure[0]
+            # Prefer mentor-verified structures, then approved, then pending
+            if structure_record.approval_status in ['mentor_verified', 'approved']:
+                logger.info(f"✅ Using cached lesson structure ({structure_record.approval_status})")
+                # Update last_used_at timestamp
+                structure_record.last_used_at = timezone.now()
+                await sync_to_async(structure_record.save)()
+                return structure_record.structure
+            else:
+                logger.debug(f"⚠️ Cached structure exists but has pending approval - regenerating")
+
+        # STEP 2: Generate lesson structure if not cached
+        logger.info(f"📋 No suitable cached structure found - generating new one")
 
         # Calculate lesson parameters
         params = self._calculate_lesson_params(
@@ -606,6 +643,23 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
                 logger.debug(f"  📝 Lesson {lesson.get('lesson_number')}: {lesson.get('title')}")
 
             logger.info(f"✅ Generated {len(lesson_structure)} lessons for {module_title}")
+
+            # STEP 3: Cache the generated structure
+            try:
+                await sync_to_async(LessonStructure.objects.create)(
+                    content_hash=content_hash,
+                    module_title=module_title,
+                    difficulty=module_difficulty,
+                    learning_pace=user_learning_pace,
+                    time_commitment_hours=user_time_commitment,
+                    structure=lesson_structure,
+                    generated_by_ai_model=self._get_current_ai_model(),
+                )
+                logger.debug(f"  💾 Cached lesson structure with hash: {content_hash}")
+            except Exception as cache_error:
+                logger.warning(f"⚠️ Failed to cache lesson structure: {cache_error}")
+                # Don't fail generation if caching fails - just log and continue
+
             return lesson_structure
 
         except json.JSONDecodeError as e:
@@ -621,6 +675,15 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
         except Exception as e:
             logger.error(f"❌ Failed to generate lesson structure: {e}", exc_info=True)
             raise
+
+    def _get_current_ai_model(self) -> str:
+        """Get the current AI model being used."""
+        if self.deepseek_api_key:
+            return 'deepseek-v3.1'
+        elif self.groq_api_key:
+            return 'groq-llama-3.3-70b'
+        else:
+            return 'gemini-2.0-flash-exp'
 
     def _generate_fallback_lesson_structure(
         self,

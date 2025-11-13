@@ -684,6 +684,144 @@ class MentorReview(models.Model):
         return f"{self.mentor.email} {self.status} {self.lesson_content.title}"
 
 
+class LessonStructure(models.Model):
+    """
+    Caches AI-generated lesson structures for lesson generation.
+
+    A lesson structure is a list of specific, teachable lessons for a module.
+    Rather than generating the same lesson structure repeatedly, we cache it
+    by content hash (module_title:difficulty:learning_pace:time_commitment).
+
+    Future enhancement: Allow community voting on lesson structures, where
+    highly-voted structures become "recommended" and are reused more often.
+
+    Example for "Python Basics" (beginner, fast learner, 5 hrs/week):
+    [
+        {
+            "lesson_number": 1,
+            "title": "What is Python & Why Use It",
+            "description": "Introduction to Python programming...",
+            "learning_objectives": ["Learn what Python is", "Understand use cases"],
+            "search_query": "introduction to Python programming language",
+            "video_duration_min": 5,
+            "video_duration_max": 10
+        },
+        ...
+    ]
+    """
+    id = models.CharField(
+        max_length=10,
+        primary_key=True,
+        default=generate_short_id,
+        unique=True,
+    )
+
+    # Content hash for caching
+    content_hash = models.CharField(
+        max_length=64,
+        db_index=True,
+        unique=True,
+        help_text="MD5 hash of (module_title:difficulty:learning_pace:time_commitment)"
+    )
+
+    # Lesson structure metadata
+    module_title = models.CharField(
+        max_length=255,
+        db_index=True,
+        help_text="Module title this structure is for"
+    )
+    difficulty = models.CharField(
+        max_length=30,
+        choices=[('beginner', 'Beginner'), ('intermediate', 'Intermediate'), ('advanced', 'Advanced')],
+        db_index=True,
+        help_text="Module difficulty level"
+    )
+    learning_pace = models.CharField(
+        max_length=20,
+        choices=[('fast', 'Fast'), ('moderate', 'Moderate'), ('thorough', 'Thorough')],
+        db_index=True,
+        default='moderate',
+        help_text="User's learning pace"
+    )
+    time_commitment_hours = models.FloatField(
+        default=5.0,
+        db_index=True,
+        help_text="User's weekly time commitment (hours)"
+    )
+
+    # The actual lesson structure (list of lesson configs)
+    structure = models.JSONField(
+        help_text="List of lesson dicts with title, description, objectives, search_query, duration"
+    )
+
+    # Community voting (for future "recommended structures" feature)
+    upvotes = models.IntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Community upvotes on this structure"
+    )
+    downvotes = models.IntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Community downvotes on this structure"
+    )
+    approval_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pending Review'),
+            ('approved', 'Community Approved'),
+            ('rejected', 'Community Rejected'),
+            ('mentor_verified', 'Mentor Verified'),
+        ],
+        default='pending',
+        db_index=True,
+        help_text="Approval status (mentor_verified = most trusted)"
+    )
+
+    # Timestamps
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True,
+        help_text="When this structure was first generated"
+    )
+    last_used_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Last time this structure was used (for popularity tracking)"
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        help_text="Last time this record was updated"
+    )
+
+    # Generation metadata
+    generated_by_ai_model = models.CharField(
+        max_length=50,
+        default='gemini-2.0-flash-exp',
+        help_text="AI model that generated this structure"
+    )
+
+    @staticmethod
+    def generate_content_hash(module_title: str, difficulty: str, learning_pace: str, time_commitment_hours: float) -> str:
+        """Generate content hash for caching and lookup."""
+        key_str = f"{module_title}:{difficulty}:{learning_pace}:{time_commitment_hours}"
+        return hashlib.md5(key_str.encode()).hexdigest()
+
+    class Meta:
+        verbose_name = "Lesson Structure"
+        verbose_name_plural = "Lesson Structures"
+        ordering = ['-last_used_at', '-created_at']
+        indexes = [
+            models.Index(fields=['content_hash']),
+            models.Index(fields=['module_title', 'difficulty', 'learning_pace']),
+            models.Index(fields=['approval_status', '-upvotes']),
+        ]
+
+    def __str__(self):
+        return f"{self.module_title} ({self.difficulty}) - {len(self.structure)} lessons"
+
+
 class LessonGenerationRequest(models.Model):
     """
     Stores one-time request keys for Azure Function authentication.
