@@ -2503,7 +2503,15 @@ Generate for: {request.step_title}"""
 
     async def generate_lessons_for_module(self, module, user_profile: Optional[Dict] = None) -> int:
         """
-        Generate all lessons for a module (3-5 lessons by default).
+        Generate all lessons for a module using AI-generated lesson structure (NEW - Phase A.3).
+
+        FLOW:
+        1. Generate lesson structure (AI breaks down module into specific lessons)
+        2. For each lesson:
+           - Search YouTube using lesson-specific query
+           - Generate lesson content
+           - Save to database
+
         Called directly from Django mutation when Azure Function provides request key.
 
         Args:
@@ -2519,27 +2527,50 @@ Generate for: {request.step_title}"""
         logger.info(f"🚀 [Module] Generating lessons for module: {module.title}")
 
         try:
-            # Determine number of lessons based on module difficulty
-            lesson_counts = {
-                'beginner': 5,
-                'intermediate': 5,
-                'advanced': 4
-            }
-            num_lessons = lesson_counts.get(module.difficulty, 5)
-            logger.info(f"📚 Generating {num_lessons} lessons for {module.difficulty} module")
+            # STEP 1: Generate lesson structure using AI
+            logger.info(f"📋 Generating lesson structure for: {module.title}")
+
+            # Get learner preferences from user profile
+            learning_pace = user_profile.get('learning_pace', 'moderate') if user_profile else 'moderate'
+            time_commitment = user_profile.get('time_commitment_hours', 5.0) if user_profile else 5.0
+
+            # Generate structured lesson plan
+            lesson_structure = await self.generate_lesson_structure(
+                module_title=module.title,
+                module_difficulty=module.difficulty,
+                user_learning_pace=learning_pace,
+                user_time_commitment=time_commitment
+            )
+
+            logger.info(f"📚 Lesson structure generated: {len(lesson_structure)} lessons")
+
+            if not lesson_structure:
+                raise Exception("Failed to generate lesson structure")
 
             lessons_created = 0
 
-            # Generate lessons (3-5 depending on complexity)
-            for lesson_num in range(1, num_lessons + 1):
+            # STEP 2: Generate lessons from structure
+            for lesson_config in lesson_structure:
                 try:
+                    lesson_num = lesson_config.get('lesson_number', lessons_created + 1)
+                    lesson_title = lesson_config.get('title', f"Lesson {lesson_num}")
+                    search_query = lesson_config.get('search_query', module.title)
+                    video_duration_min = lesson_config.get('video_duration_min', 10)
+                    video_duration_max = lesson_config.get('video_duration_max', 20)
+                    learning_objectives = lesson_config.get('learning_objectives', [])
+                    description = lesson_config.get('description', '')
+
                     # Determine learning style (rotate through styles)
                     styles = ['hands_on', 'video', 'reading', 'mixed']
                     learning_style = styles[(lesson_num - 1) % len(styles)]
 
-                    # Create lesson request
+                    logger.info(f"  📝 Lesson {lesson_num}/{len(lesson_structure)}: {lesson_title} ({learning_style})")
+                    logger.debug(f"     Search query: {search_query}")
+                    logger.debug(f"     Duration: {video_duration_min}-{video_duration_max} min")
+
+                    # Create lesson request with lesson structure info
                     lesson_request = LessonRequest(
-                        step_title=module.title,
+                        step_title=lesson_title,  # Use specific lesson title, not module title
                         lesson_number=lesson_num,
                         learning_style=learning_style,
                         user_profile=user_profile or {},
@@ -2548,22 +2579,34 @@ Generate for: {request.step_title}"""
                         enable_research=True
                     )
 
-                    # Generate lesson
-                    logger.info(f"  📝 Generating lesson {lesson_num}/{num_lessons} ({learning_style})")
+                    # Generate lesson content
+                    logger.debug(f"     Generating lesson content...")
                     lesson_data = await self.generate_lesson(lesson_request)
 
                     # Save to database
                     if not lesson_data:
                         raise Exception(f"Lesson {lesson_num} generation returned None")
 
+                    # Store lesson structure info in source_attribution
+                    source_attribution = lesson_data.get('source_attribution', {})
+                    source_attribution['lesson_structure'] = {
+                        'title': lesson_title,
+                        'description': description,
+                        'learning_objectives': learning_objectives,
+                        'search_query': search_query,
+                        'video_duration_min': video_duration_min,
+                        'video_duration_max': video_duration_max,
+                    }
+
                     lesson_content = await sync_to_async(LessonContent.objects.create)(
                         module=module,
                         lesson_number=lesson_num,
+                        title=lesson_title,  # Store lesson title explicitly
                         content=lesson_data.get('content', {}),
                         learning_style=learning_style,
                         difficulty=module.difficulty,
                         source_type='ai_only',
-                        source_attribution=lesson_data.get('source_attribution', {})
+                        source_attribution=source_attribution
                     )
 
                     # Verify the lesson was actually saved
@@ -2578,7 +2621,7 @@ Generate for: {request.step_title}"""
                     # Continue with next lesson even if one fails
                     continue
 
-            logger.info(f"✅ Successfully created {lessons_created}/{num_lessons} lessons")
+            logger.info(f"✅ Successfully created {lessons_created}/{len(lesson_structure)} lessons")
             return lessons_created
 
         except Exception as e:
