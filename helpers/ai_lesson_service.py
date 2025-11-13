@@ -429,7 +429,231 @@ class LessonGenerationService:
                 logger.debug("🧹 Closed Gemini client")
             except Exception as e:
                 logger.debug(f"⚠️ Error closing Gemini client: {e}")
-    
+
+    # ========================================
+    # LESSON STRUCTURE GENERATION (NEW - Phase A)
+    # ========================================
+
+    def _calculate_lesson_params(self, module_difficulty: str, learning_pace: str, time_commitment: float) -> Dict[str, Any]:
+        """
+        Calculate lesson count and duration based on learner profile.
+
+        Uses research-based recommendations for optimal learning retention:
+        - Shorter videos (5-15 min) maximize retention
+        - Longer videos (25-60 min) for advanced topics needing depth
+        - Learner pace preference is primary factor
+
+        Args:
+            module_difficulty: 'beginner', 'intermediate', 'advanced'
+            learning_pace: 'fast', 'moderate', 'thorough'
+            time_commitment: Hours available per week for this roadmap
+
+        Returns:
+            Dict with:
+            - num_lessons: Total lessons for this module
+            - video_duration_min/max: Recommended video length in minutes
+        """
+        # Base lesson counts by difficulty and pace
+        lesson_counts = {
+            'beginner': {
+                'fast': 6,       # More lessons = smaller chunks
+                'moderate': 5,
+                'thorough': 4,   # Fewer lessons = deeper dive
+            },
+            'intermediate': {
+                'fast': 5,
+                'moderate': 5,
+                'thorough': 4,
+            },
+            'advanced': {
+                'fast': 4,
+                'moderate': 4,
+                'thorough': 3,
+            }
+        }
+
+        # Base video durations by difficulty and pace (in minutes)
+        video_durations = {
+            'beginner': {
+                'fast': (5, 10),
+                'moderate': (10, 15),
+                'thorough': (15, 25),
+            },
+            'intermediate': {
+                'fast': (10, 15),
+                'moderate': (15, 25),
+                'thorough': (25, 40),
+            },
+            'advanced': {
+                'fast': (15, 25),
+                'moderate': (25, 40),
+                'thorough': (40, 60),
+            }
+        }
+
+        # Get base values
+        num_lessons = lesson_counts.get(module_difficulty, {}).get(learning_pace, 5)
+        duration_min, duration_max = video_durations.get(module_difficulty, {}).get(learning_pace, (10, 20))
+
+        # Adjust based on time commitment (hours per week)
+        if time_commitment < 2:
+            # Low time commitment: more lessons (shorter, more manageable)
+            num_lessons = min(num_lessons + 2, 8)
+            duration_max = min(duration_max, 15)
+        elif time_commitment > 10:
+            # High time commitment: can handle longer, deeper videos
+            duration_min = max(duration_min, 10)
+
+        return {
+            'num_lessons': num_lessons,
+            'video_duration_min': duration_min,
+            'video_duration_max': duration_max,
+        }
+
+    async def generate_lesson_structure(
+        self,
+        module_title: str,
+        module_difficulty: str,
+        user_learning_pace: str = 'moderate',
+        user_time_commitment: float = 5.0,
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate structured lesson plan using AI.
+
+        Creates a curriculum breaking down a module into specific,
+        teachable lessons with optimized YouTube search queries.
+
+        Args:
+            module_title: e.g., "Introduction to Python"
+            module_difficulty: 'beginner', 'intermediate', 'advanced'
+            user_learning_pace: 'fast', 'moderate', 'thorough'
+            user_time_commitment: Hours available per week
+
+        Returns:
+            List of lesson dicts:
+            [
+                {
+                    'lesson_number': 1,
+                    'title': 'What is Python & Why Use It',
+                    'description': 'Overview of Python...',
+                    'learning_objectives': ['Understand what Python is', ...],
+                    'search_query': 'introduction to Python programming language',
+                    'video_duration_min': 5,
+                    'video_duration_max': 15,
+                },
+                ...
+            ]
+        """
+        logger.info(f"📚 Generating lesson structure for: {module_title} ({module_difficulty})")
+
+        # Calculate lesson parameters
+        params = self._calculate_lesson_params(
+            module_difficulty,
+            user_learning_pace,
+            user_time_commitment
+        )
+        num_lessons = params['num_lessons']
+
+        logger.info(f"📊 Lesson plan: {num_lessons} lessons, {params['video_duration_min']}-{params['video_duration_max']} min videos")
+
+        # Create prompt for AI to generate lesson structure
+        prompt = f"""
+You are an expert programming educator. Create a structured curriculum for teaching "{module_title}".
+
+Requirements:
+- Difficulty level: {module_difficulty}
+- Number of lessons: {num_lessons}
+- Each lesson should build logically on previous ones
+- Learner pace: {user_learning_pace}
+
+For EACH lesson, provide in JSON format:
+{{
+    "lesson_number": <number>,
+    "title": "<specific lesson title>",
+    "description": "<2-3 sentence description of what this lesson teaches>",
+    "learning_objectives": ["<objective 1>", "<objective 2>", "<objective 3>"],
+    "search_query": "<optimized YouTube search query for this specific lesson>"
+}}
+
+IMPORTANT:
+- Titles should be specific and actionable (e.g., "Understanding If/Else Statements" not "Conditionals Overview")
+- Search queries should be optimized for educational YouTube videos (e.g., "Python if else tutorial" not just "if else")
+- Include learning objectives that explain WHAT students will be able to do
+- Ensure logical progression from basics to more complex concepts
+
+Return ONLY a JSON array of lessons, nothing else. Example format:
+[
+    {{"lesson_number": 1, "title": "...", "description": "...", "learning_objectives": [...], "search_query": "..."}},
+    {{"lesson_number": 2, "title": "...", "description": "...", "learning_objectives": [...], "search_query": "..."}}
+]
+"""
+
+        try:
+            # Generate lesson structure using hybrid AI
+            response = await self._generate_with_ai(prompt, json_mode=True, max_tokens=4000)
+
+            # Parse JSON response
+            lesson_structure = json.loads(response)
+
+            # Validate and enhance with duration info
+            if not isinstance(lesson_structure, list):
+                lesson_structure = [lesson_structure]
+
+            # Add duration parameters to each lesson
+            for lesson in lesson_structure:
+                lesson['video_duration_min'] = params['video_duration_min']
+                lesson['video_duration_max'] = params['video_duration_max']
+                logger.debug(f"  📝 Lesson {lesson.get('lesson_number')}: {lesson.get('title')}")
+
+            logger.info(f"✅ Generated {len(lesson_structure)} lessons for {module_title}")
+            return lesson_structure
+
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Failed to parse lesson structure JSON: {e}")
+            # Return fallback generic structure
+            logger.warning(f"⚠️ Using fallback lesson structure")
+            return self._generate_fallback_lesson_structure(
+                module_title,
+                module_difficulty,
+                num_lessons,
+                params
+            )
+        except Exception as e:
+            logger.error(f"❌ Failed to generate lesson structure: {e}", exc_info=True)
+            raise
+
+    def _generate_fallback_lesson_structure(
+        self,
+        module_title: str,
+        difficulty: str,
+        num_lessons: int,
+        params: Dict
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate a basic fallback lesson structure if AI fails.
+
+        Creates generic but functional lessons to ensure generation continues.
+        """
+        logger.warning(f"📋 Generating fallback structure: {num_lessons} lessons")
+
+        fallback_lessons = []
+        for i in range(1, num_lessons + 1):
+            fallback_lessons.append({
+                'lesson_number': i,
+                'title': f'{module_title} - Part {i}',
+                'description': f'Lesson {i} of the {module_title} course',
+                'learning_objectives': [
+                    f'Understand key concepts of part {i}',
+                    f'Apply knowledge from lesson {i}',
+                    f'Build skills for next lesson',
+                ],
+                'search_query': f'{module_title} tutorial part {i}',
+                'video_duration_min': params['video_duration_min'],
+                'video_duration_max': params['video_duration_max'],
+            })
+
+        return fallback_lessons
+
     # ========================================
     # HYBRID AI GENERATION SYSTEM
     # ========================================
