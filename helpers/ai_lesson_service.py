@@ -1799,57 +1799,71 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
         if not video_data:
             logger.warning(f"⚠️ No YouTube video found for: {request.step_title}")
             return await self._generate_fallback_lesson(request)
-        
-        # Step 2: Fetch transcript (with YouTube captions + optional Groq fallback)
-        # If video came from caption-filtered search, skip Groq fallback to avoid yt-dlp bot detection
-        skip_groq = video_data.get('caption_filter_matched', False)
-        transcript = self.youtube_service.get_transcript(
-            video_data['video_id'],
-            skip_groq_fallback=skip_groq
-        )
-        
-        if not transcript:
-            logger.warning(f"⚠️ No transcript available (tried YouTube + Groq): {video_data['video_id']}")
-            # Still return video, but without AI analysis
-            lesson_data = {
-                'type': 'video',  # ✅ FIX: Added 'type' field for test compatibility
-                'lesson_type': 'video',
-                'title': video_data['title'],
-                'video': video_data,
-                'summary': video_data['description'][:300],
-                'note': 'Transcript not available - watch video for full content',
-                'estimated_duration': video_data.get('duration_minutes', 15)
-            }
-            
-            # NOTE: research_metadata is injected by inject_enhanced_metadata() in generate_lesson()
 
-            # Generate unique lesson description
-            lesson_data['summary'] = await self._generate_lesson_description(request, lesson_data['summary'])
+        # Phase C: Simplified video lesson - use video as reference material only
+        # No transcript fetching needed (removes bot detection issues and transcript API rate limits)
+        logger.info(f"✅ Found video: {video_data['title'][:50]}... ({video_data.get('duration_minutes', 15)} min)")
 
-            return lesson_data
-        
-        # Step 3: Gemini analyzes transcript (WITH RESEARCH CONTEXT!)
-        # Pass the AI call function to the analyzer
-        analysis = self.video_analyzer.analyze_transcript(
-            transcript=transcript,
-            topic=request.step_title,
-            user_profile=request.user_profile,
-            research_context=research_data,
-            ai_call_func=self._call_gemini_api
-        )
-        
-        # Step 4: Combine video + analysis
+        # Step 2: Generate lesson content using AI with research context (no transcript needed)
+        # AI will create study guide and key concepts based on video title + research data
+        prompt = f"""
+Create a comprehensive study guide for this video-based lesson.
+
+Video Title: {video_data['title']}
+Topic: {request.step_title}
+Duration: {video_data.get('duration_minutes', 15)} minutes
+Channel: {video_data.get('channel', 'Unknown')}
+
+Generate a structured lesson with:
+1. Summary (2-3 sentences about what the video teaches)
+2. Key Concepts (3-5 main ideas from the title and topic)
+3. Learning Objectives (3-4 things students will learn)
+4. Study Guide (5-7 key sections to focus on)
+5. Practice Quiz (3-5 questions based on the topic)
+
+Format as JSON:
+{{
+    "summary": "...",
+    "key_concepts": [...],
+    "learning_objectives": [...],
+    "study_guide": "...",
+    "quiz": [
+        {{"question": "...", "options": [...], "correct": "..."}},
+        ...
+    ]
+}}
+
+{f'Use these research sources for context: {research_data}' if research_data else ''}
+"""
+
+        try:
+            response = await self._generate_with_ai(prompt, json_mode=True, max_tokens=3000)
+            analysis = json.loads(response) if response else {}
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to generate lesson content: {e}")
+            analysis = {}
+
+        # Step 3: Build lesson data with video as embedded reference
         lesson_data = {
-            'type': 'video',  # ✅ FIX: Added 'type' field for test compatibility
+            'type': 'video',
             'lesson_type': 'video',
             'title': video_data['title'],
             'summary': analysis.get('summary', video_data['description'][:300]),
-            'video': video_data,
+            'video': video_data,  # Video URL embedded here for frontend to render
             'key_concepts': analysis.get('key_concepts', []),
-            'timestamps': analysis.get('timestamps', []),
+            'learning_objectives': analysis.get('learning_objectives', []),
             'study_guide': analysis.get('study_guide', ''),
             'quiz': analysis.get('quiz', []),
-            'estimated_duration': video_data.get('duration_minutes', 15)
+            'estimated_duration': video_data.get('duration_minutes', 15),
+            'video_reference': {  # Additional metadata for video embedding
+                'video_id': video_data['video_id'],
+                'video_url': video_data['video_url'],
+                'embed_url': video_data['embed_url'],
+                'duration_minutes': video_data.get('duration_minutes', 15),
+                'channel': video_data.get('channel', ''),
+                'view_count': video_data.get('view_count', 0),
+                'published_at': video_data.get('published_at', '')
+            }
         }
 
         # Generate unique lesson description
@@ -1858,20 +1872,18 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
         # Adjust content complexity based on user's time commitment
         if 'quiz' in lesson_data and lesson_data['quiz']:
             lesson_data['quiz'] = self._adjust_content_complexity(
-                lesson_data['quiz'], 
+                lesson_data['quiz'],
                 request.user_profile
             )
-        
+
         if 'key_concepts' in lesson_data and lesson_data['key_concepts']:
             lesson_data['key_concepts'] = self._adjust_content_complexity(
-                lesson_data['key_concepts'], 
+                lesson_data['key_concepts'],
                 request.user_profile
             )
-        
-        # NOTE: research_metadata is injected by inject_enhanced_metadata() in generate_lesson()
 
         logger.info(f"✅ Video lesson generated: {video_data['title'][:50]}... ({lesson_data['estimated_duration']} min)")
-        
+
         return lesson_data
     
     # YouTube service methods have been moved to helpers.youtube module
@@ -2315,41 +2327,26 @@ Output only the description text, no quotes or extra formatting.'''.format(
         text_response = await self._generate_with_ai(text_prompt, json_mode=False, max_tokens=4000)
         text_content = self._parse_mixed_text(text_response) if text_response else {}
         
-        # 2. Video component (with optional transcript analysis) - Phase B: with duration matching
+        # 2. Video component - Phase C: simplified (no transcript needed)
         video_data = self.youtube_service.search_and_rank(
             request.step_title,
             duration_min=request.video_duration_min,
             duration_max=request.video_duration_max
         )
 
-        # 2b. Try to get transcript for video analysis (YouTube or Groq fallback)
+        # Phase C: Simplified video handling - just use video as reference
+        # No transcript fetching (removes bot detection and rate limit issues)
         video_analysis = {}
         if video_data:
-            transcript = self.youtube_service.get_transcript(video_data['video_id'])
-            
-            # If we got transcript, do light analysis for mixed lesson
-            if transcript:
-                logger.info("📝 Analyzing video transcript for mixed lesson...")
-                # Lightweight analysis (just key points, not full video lesson analysis)
-                analysis_prompt = f"""Analyze this video transcript for "{request.step_title}":
-
-{transcript[:3000]}  # First 3000 chars only for mixed lessons
-
-Provide SHORT analysis (this is part of a mixed lesson):
-- summary (2-3 sentences max)
-- key_concepts (3-5 points)
-- 2 important timestamps
-
-Output as JSON with keys: summary, key_concepts[], timestamps[]"""
-                
-                # NOW USES HYBRID AI
-                analysis_response = await self._generate_with_ai(analysis_prompt, json_mode=True, max_tokens=2000)
-                if analysis_response:
-                    try:
-                        import json
-                        video_analysis = json.loads(analysis_response.strip('`').replace('json\n', '').strip())
-                    except:
-                        logger.warning("⚠️ Could not parse video analysis, skipping")
+            logger.info(f"✅ Found video for mixed lesson: {video_data['title'][:40]}...")
+            # AI will generate key points based on video title and research context
+            video_analysis = {
+                'title': video_data['title'],
+                'summary': video_data.get('description', '')[:200],
+                'key_concepts': [],  # Will be generated in lesson assembly
+                'video_url': video_data.get('video_url', ''),
+                'duration_minutes': video_data.get('duration_minutes', 15)
+            }
         
         # 3. Hands-on exercises (fewer than hands-on-only) - NOW USES HYBRID AI
         exercises_prompt = self._create_mixed_exercises_prompt(request)
@@ -2371,11 +2368,11 @@ Output as JSON with keys: summary, key_concepts[], timestamps[]"""
             'text_introduction': text_content.get('introduction', ''),
             'key_concepts': text_content.get('key_concepts', []),
             
-            # Video component (30%) - now includes Groq transcription fallback
+            # Video component (30%) - Phase C: simplified (no transcript needed)
             'video': video_data,
-            'video_summary': video_analysis.get('summary', ''),  # From transcript analysis
-            'video_key_concepts': video_analysis.get('key_concepts', []),  # From transcript
-            'video_timestamps': video_analysis.get('timestamps', []),  # From transcript
+            'video_summary': video_analysis.get('summary', ''),  # From video description
+            'video_key_concepts': video_analysis.get('key_concepts', []),  # Generated by AI
+            'video_timestamps': video_analysis.get('timestamps', []),  # Optional
             
             # Hands-on component (20%)
             'exercises': exercises[:2],  # Just 2 exercises
