@@ -631,6 +631,16 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
             # Generate lesson structure using hybrid AI
             response = await self._generate_with_ai(prompt, json_mode=True, max_tokens=4000)
 
+            # Validate response is not empty
+            if not response or not response.strip():
+                logger.warning(f"⚠️ AI returned empty response, using fallback")
+                return self._generate_fallback_lesson_structure(
+                    module_title,
+                    module_difficulty,
+                    num_lessons,
+                    params
+                )
+
             # Parse JSON response
             lesson_structure = json.loads(response)
 
@@ -666,6 +676,7 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
 
         except json.JSONDecodeError as e:
             logger.error(f"❌ Failed to parse lesson structure JSON: {e}")
+            logger.debug(f"   Response was: {response[:500] if response else 'empty'}")
             # Return fallback generic structure
             logger.warning(f"⚠️ Using fallback lesson structure")
             return self._generate_fallback_lesson_structure(
