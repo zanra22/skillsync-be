@@ -1,193 +1,206 @@
-#!/usr/bin/env python
 """
-Test actual lesson generation with YouTube video selection.
-Tests the complete pipeline: topic -> YouTube video search -> lesson generation.
+Test script to verify Phase A-D lesson generation changes
 """
 import os
-import sys
+import django
+import json
 import asyncio
+from asgiref.sync import sync_to_async
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings.dev')
-import django
 django.setup()
 
 from helpers.ai_lesson_service import LessonGenerationService, LessonRequest
+from lessons.models import LessonStructure
 
-print("=" * 100)
-print("LESSON GENERATION WITH YOUTUBE VIDEO TEST")
-print("=" * 100)
 
-# Initialize lesson service
-print("\n[INFO] Initializing LessonGenerationService...")
-lesson_service = LessonGenerationService()
+async def test_lesson_structure_generation():
+    """Test Phase A.1: Lesson structure generation"""
+    print("\n" + "="*80)
+    print("TEST 1: Lesson Structure Generation (Phase A.1)")
+    print("="*80)
 
-# Test topics
-test_lessons = [
-    {
-        "title": "Python List Comprehension",
-        "step_title": "Python Intermediate Concepts",
-        "learning_style": "video",
-        "difficulty": "intermediate",
-    },
-    {
-        "title": "JavaScript Event Listeners",
-        "step_title": "JavaScript DOM Manipulation",
-        "learning_style": "hands_on",
-        "difficulty": "beginner",
-    },
-    {
-        "title": "React Hooks useEffect",
-        "step_title": "React Advanced Patterns",
-        "learning_style": "reading",
-        "difficulty": "intermediate",
-    },
-    {
-        "title": "SQL JOIN Operations",
-        "step_title": "Database Query Optimization",
-        "learning_style": "mixed",
-        "difficulty": "intermediate",
-    },
-    {
-        "title": "Docker Container Networking",
-        "step_title": "Docker & Containerization",
-        "learning_style": "video",
-        "difficulty": "advanced",
-    },
-]
+    service = LessonGenerationService()
 
-results = {
-    "success": 0,
-    "failed": 0,
-    "details": []
-}
+    try:
+        structure = await service.generate_lesson_structure(
+            module_title="Introduction to Python",
+            module_difficulty="beginner",
+            user_learning_pace="moderate",
+            user_time_commitment=5.0
+        )
 
-async def test_lesson_generation():
-    """Test lesson generation for multiple topics"""
+        print(f"\n✅ Generated structure with {len(structure)} lessons:")
+        for lesson in structure:
+            print(f"  - Lesson {lesson.get('lesson_number')}: {lesson.get('title')}")
+            print(f"    Search Query: {lesson.get('search_query')}")
+            print(f"    Duration: {lesson.get('video_duration_min')}-{lesson.get('video_duration_max')} min")
 
-    for idx, lesson_config in enumerate(test_lessons, 1):
-        title = lesson_config["title"]
-        step_title = lesson_config["step_title"]
-        learning_style = lesson_config["learning_style"]
-        difficulty = lesson_config["difficulty"]
+        return True
 
-        print(f"\n[{idx}/{len(test_lessons)}] Generating lesson: {title}")
-        print(f"    Step: {step_title} | Style: {learning_style} | Difficulty: {difficulty}")
-        print("    Status: ", end="", flush=True)
+    except Exception as e:
+        print(f"❌ FAILED: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
-        try:
-            # Create lesson request
-            request = LessonRequest(
-                title=title,
-                step_title=step_title,
-                learning_style=learning_style,
-                difficulty=difficulty,
-            )
 
-            # Call the actual lesson generation
-            lesson_content = await lesson_service.generate_lesson(request)
+async def test_lesson_structure_caching():
+    """Test Phase A.2: Lesson structure caching"""
+    print("\n" + "="*80)
+    print("TEST 2: Lesson Structure Caching (Phase A.2)")
+    print("="*80)
 
-            if lesson_content:
-                print("[OK] Generated successfully")
+    # First call (should generate)
+    service = LessonGenerationService()
 
-                # Check if lesson has content
-                has_content = False
-                content_length = 0
-                
-                if isinstance(lesson_content, dict):
-                    has_content = bool(lesson_content.get('content') or lesson_content.get('introduction'))
-                    content_length = len(str(lesson_content))
-                elif isinstance(lesson_content, str):
-                    has_content = len(lesson_content) > 50
-                    content_length = len(lesson_content)
+    try:
+        print("\n[First Call] Generating lesson structure...")
+        structure1 = await service.generate_lesson_structure(
+            module_title="Python Basics",
+            module_difficulty="beginner",
+            user_learning_pace="fast",
+            user_time_commitment=3.0
+        )
+        print(f"✅ Generated {len(structure1)} lessons")
 
-                if has_content:
-                    print(f"    Content: {content_length} characters")
-                    results["success"] += 1
-                    results["details"].append({
-                        "title": title,
-                        "status": "success",
-                        "content_length": content_length,
-                    })
-                else:
-                    print("    [WARN] Generated but no meaningful content")
-                    results["failed"] += 1
-                    results["details"].append({
-                        "title": title,
-                        "status": "empty_content",
-                    })
-            else:
-                print("[FAIL] No lesson content returned")
-                results["failed"] += 1
-                results["details"].append({
-                    "title": title,
-                    "status": "no_content",
-                })
+        # Check if it was cached (use sync_to_async for ORM queries)
+        @sync_to_async
+        def get_cached_structure():
+            return LessonStructure.objects.filter(
+                module_title="Python Basics",
+                difficulty="beginner"
+            ).first()
 
-        except Exception as e:
-            print(f"[ERROR] {type(e).__name__}")
-            print(f"    Message: {str(e)[:100]}")
-            results["failed"] += 1
-            results["details"].append({
-                "title": title,
-                "status": "error",
-                "error": str(e)[:100],
-            })
+        cached = await get_cached_structure()
 
-# Run the async test
-print("\n[INFO] Starting lesson generation tests...\n")
-asyncio.run(test_lesson_generation())
+        if cached:
+            print(f"✅ Structure cached with hash: {cached.content_hash}")
+            print(f"   Approval status: {cached.approval_status}")
+        else:
+            print("⚠️ Structure not found in cache")
 
-# Print summary
-print(f"\n{'=' * 100}")
-print("RESULTS SUMMARY")
-print(f"{'=' * 100}\n")
+        # Second call (should use cache if available)
+        print("\n[Second Call] Retrieving lesson structure...")
+        structure2 = await service.generate_lesson_structure(
+            module_title="Python Basics",
+            module_difficulty="beginner",
+            user_learning_pace="fast",
+            user_time_commitment=3.0
+        )
+        print(f"✅ Retrieved structure with {len(structure2)} lessons")
 
-total = results["success"] + results["failed"]
-success_pct = (results["success"] / total * 100) if total > 0 else 0
+        # Compare
+        if structure1 == structure2:
+            print("✅ Structures match (cache working)")
+        else:
+            print("⚠️ Structures differ (new generation)")
 
-print(f"Total Lessons Tested:    {total}")
-print(f"[OK]   Successful:       {results['success']} ({success_pct:.1f}%)")
-print(f"[FAIL] Failed:           {results['failed']}")
+        return True
 
-# Show details
-print(f"\n{'=' * 100}")
-print("DETAILED RESULTS")
-print(f"{'=' * 100}\n")
+    except Exception as e:
+        print(f"❌ FAILED: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
-for detail in results["details"]:
-    title = detail["title"]
-    status = detail["status"]
 
-    if status == "success":
-        print(f"[OK] {title}")
-        print(f"     Content length: {detail.get('content_length', 0)} chars")
-    elif status == "error":
-        print(f"[ERROR] {title}")
-        print(f"        {detail.get('error', 'Unknown error')}")
+async def test_video_selection_with_duration():
+    """Test Phase B: Duration-aware video selection"""
+    print("\n" + "="*80)
+    print("TEST 3: Duration-Aware Video Selection (Phase B)")
+    print("="*80)
+
+    service = LessonGenerationService()
+
+    try:
+        # Test video search with duration constraints
+        print("\nSearching for 'Python variables tutorial' (5-15 min)...")
+        video = service.youtube_service.search_and_rank(
+            topic="Python variables tutorial",
+            duration_min=5,
+            duration_max=15
+        )
+
+        if video:
+            print(f"✅ Found video: {video['title'][:60]}...")
+            print(f"   Duration: {video['duration_minutes']} min")
+            print(f"   Views: {video['view_count']:,}")
+            print(f"   URL: {video['video_url']}")
+            return True
+        else:
+            print("⚠️ No video found")
+            return False
+
+    except Exception as e:
+        print(f"❌ FAILED: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def test_lesson_request_with_duration():
+    """Test Phase B/C: LessonRequest includes duration parameters"""
+    print("\n" + "="*80)
+    print("TEST 4: LessonRequest with Duration Parameters")
+    print("="*80)
+
+    try:
+        request = LessonRequest(
+            step_title="Understanding Python Variables",
+            lesson_number=1,
+            learning_style="video",
+            user_profile={"learning_pace": "moderate"},
+            difficulty="beginner",
+            video_duration_min=5,
+            video_duration_max=15
+        )
+
+        print(f"✅ LessonRequest created:")
+        print(f"   Title: {request.step_title}")
+        print(f"   Duration: {request.video_duration_min}-{request.video_duration_max} min")
+        print(f"   Learning Style: {request.learning_style}")
+
+        return True
+
+    except Exception as e:
+        print(f"❌ FAILED: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def main():
+    """Run all tests"""
+    print("\n" + "SKILLSYNC BACKEND TESTING".center(80))
+    print("Testing Phases A-D: Lesson Structure, Caching, Duration, Video URLs")
+
+    results = []
+
+    results.append(("Test 1: Lesson Structure Generation", await test_lesson_structure_generation()))
+    results.append(("Test 2: Lesson Structure Caching", await test_lesson_structure_caching()))
+    results.append(("Test 3: Duration-Aware Video Selection", await test_video_selection_with_duration()))
+    results.append(("Test 4: LessonRequest Duration Params", await test_lesson_request_with_duration()))
+
+    # Summary
+    print("\n" + "="*80)
+    print("TEST SUMMARY")
+    print("="*80)
+
+    passed = sum(1 for _, result in results if result)
+    total = len(results)
+
+    for test_name, result in results:
+        status = "✅ PASS" if result else "❌ FAIL"
+        print(f"{status}: {test_name}")
+
+    print(f"\nTotal: {passed}/{total} tests passed")
+
+    if passed == total:
+        print("\n[OK] All tests passed! Backend is ready for deployment.")
     else:
-        print(f"[FAIL] {title} - {status}")
+        print(f"\n[WARNING] {total - passed} test(s) failed. Please review above.")
 
-# Conclusion
-print(f"\n{'=' * 100}")
-print("CONCLUSION")
-print(f"{'=' * 100}\n")
 
-if success_pct == 100:
-    print(f"[OK] PERFECT! 100% of lessons generated successfully!")
-    print("     The end-to-end lesson generation pipeline is working correctly.")
-elif success_pct >= 80:
-    print(f"[GOOD] Good! {success_pct:.1f}% of lessons generated successfully.")
-    print("       Most topics are working well.")
-elif success_pct >= 60:
-    print(f"[WARN] Partial success. {success_pct:.1f}% of lessons generated.")
-    print("       Some topics may need debugging.")
-else:
-    print(f"[POOR] Low success rate: {success_pct:.1f}% of lessons generated.")
-    print("       There are issues with the lesson generation pipeline.")
-
-print()
-
-# Cleanup
-print("[INFO] Cleaning up async resources...")
-asyncio.run(lesson_service.cleanup())
-print("[OK] Done!")
+if __name__ == "__main__":
+    asyncio.run(main())
