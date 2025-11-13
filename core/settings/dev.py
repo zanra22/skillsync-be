@@ -88,5 +88,18 @@ LOGGING = {
             'level': 'INFO',
             'propagate': False,
         },
+        # Suppress noisy Azure SDK loggers (for dev/testing in Azure)
+        'azure': {
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'azure.core.pipeline.policies': {
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'urllib3': {
+            'level': 'WARNING',
+            'propagate': False,
+        },
     },
 }

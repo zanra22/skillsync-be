@@ -102,9 +102,16 @@ else:
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'filters': {
+        'suppress_azure_sdk': {
+            '()': 'logging.Filter',
+            'name': 'azure',
+        },
+    },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
+            'filters': ['suppress_azure_sdk'],
         },
         'production_file': {
             'class': 'logging.FileHandler',
@@ -156,6 +163,19 @@ LOGGING = {
         'helpers.ai_lesson_service': {
             'handlers': ['console', 'production_file'],
             'level': 'INFO',
+            'propagate': False,
+        },
+        # Suppress noisy Azure SDK loggers
+        'azure': {
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'azure.core.pipeline.policies': {
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'urllib3': {
+            'level': 'WARNING',
             'propagate': False,
         },
     },
