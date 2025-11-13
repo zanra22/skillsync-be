@@ -4,11 +4,14 @@ YouTube Video Search and Ranking Service
 Handles video discovery with smart filtering and quality ranking.
 Integrates with YouTubeQualityRanker for 5-factor quality assessment.
 
+Phase D: Simplified for metadata-only (no transcript fetching)
+
 Key features:
 - Search with preferred caption filtering
 - Fallback to uncaptioned videos if needed
+- Duration-aware filtering (beginner: 5-15min, advanced: 40-60min)
 - Top-3 quality ranking
-- Groq transcription fallback
+- Videos embedded as reference material (URLs only)
 """
 
 import re
@@ -18,20 +21,25 @@ from datetime import datetime
 import time
 
 from .quality_ranker import YouTubeQualityRanker
-from .transcript_service import TranscriptService
 
 logger = logging.getLogger(__name__)
 
 
 class YouTubeService:
     """
-    Main YouTube service for video search and ranking.
+    Main YouTube service for video search and ranking (Phase D: Simplified).
 
     Responsibilities:
     - Search YouTube API
-    - Filter by quality criteria
+    - Filter by quality criteria (views, likes, channel authority)
+    - Filter by duration (adaptive based on user skill level)
     - Rank videos using quality ranker
-    - Integrate with transcript service for fallback
+
+    Phase D Changes:
+    - Removed transcript fetching (no longer needed)
+    - Removed Groq transcription fallback
+    - Removed TranscriptService dependency
+    - Videos now used as reference material only (URLs embedded in lessons)
     """
 
     def __init__(self, api_key: str, groq_api_key: Optional[str] = None, service_account: Optional[Dict] = None):
@@ -40,14 +48,13 @@ class YouTubeService:
 
         Args:
             api_key: YouTube Data API v3 key (legacy, for backward compatibility)
-            groq_api_key: Optional Groq API key for transcription fallback
+            groq_api_key: Optional Groq API key (deprecated - no longer used)
             service_account: Optional Google Cloud service account dict with OAuth2 credentials
         """
         self.youtube_api_key = api_key
-        self.groq_api_key = groq_api_key
+        self.groq_api_key = groq_api_key  # Kept for backward compatibility but not used
         self.service_account = service_account
         self.quality_ranker = YouTubeQualityRanker()
-        self.transcript_service = TranscriptService(api_key, groq_api_key, service_account=service_account)
         self.last_youtube_call = 0
         self._youtube_service = None  # Lazy loaded YouTube API service
 
@@ -321,15 +328,3 @@ class YouTubeService:
 
         return minutes or 10  # Default to 10 if parsing fails
 
-    def get_transcript(self, video_id: str, skip_groq_fallback: bool = False) -> Optional[str]:
-        """
-        Get transcript for a video (with fallback).
-
-        Args:
-            video_id: YouTube video ID
-            skip_groq_fallback: If True, don't use Groq transcription (for caption-filtered videos)
-
-        Returns:
-            Transcript text or None
-        """
-        return self.transcript_service.get_transcript(video_id, skip_groq_fallback=skip_groq_fallback)

@@ -1,32 +1,31 @@
 """
-YouTube Service Module
+YouTube Service Module (Phase D: Simplified)
 
-Provides comprehensive YouTube video search, quality ranking, and transcript extraction
-for lesson generation. Integrates multi-factor quality ranking with transcript availability.
+Provides YouTube video search with quality ranking for lesson generation.
+Phase D changes: Removed transcript extraction (videos used as reference only).
 
 Features:
-- Smart video filtering (top-3 with quality criteria)
-- 5-factor quality ranking (views, engagement, channel, transcript, recency)
-- Transcript extraction (YouTube captions + Groq Whisper fallback)
-- Detailed video metadata and quality metrics
+- Smart video filtering with duration-aware selection
+- 5-factor quality ranking (views, engagement, channel authority, duration, recency)
+- Metadata extraction (title, description, channel, view count, duration)
+- Detailed video metadata for embedding in lessons
 
 Classes:
 - YouTubeService: Main service for video search and ranking
-- TranscriptService: YouTube transcript fetching and fallback
-- GroqTranscription: Groq Whisper API wrapper for video transcription
-- VideoAnalyzer: Video transcript analysis with AI
+- YouTubeQualityRanker: 5-factor quality assessment
+- VideoAnalyzer: Video content analysis (kept for potential future use)
+
+Deprecated (removed Phase D):
+- TranscriptService: No longer needed (videos used as reference material)
+- GroqTranscription: Removed to eliminate bot detection issues from yt-dlp
 """
 
 from .youtube_service import YouTubeService
-from .transcript_service import TranscriptService
 from .quality_ranker import YouTubeQualityRanker
-from .groq_transcription import GroqTranscription
 from .video_analyzer import VideoAnalyzer
 
 __all__ = [
     'YouTubeService',
-    'TranscriptService',
     'YouTubeQualityRanker',
-    'GroqTranscription',
     'VideoAnalyzer',
 ]
