@@ -276,12 +276,12 @@ class MultiSourceResearchEngine:
     ) -> List[Dict]:
         """
         Search GitHub for production-ready code examples using GitHubAPIService.
-        
+
         Args:
             topic: Topic to search for
             language: Programming language filter (None = search all languages)
             max_results: Maximum results to return
-        
+
         Returns:
             List of dicts with repo/code data
         """
@@ -289,14 +289,29 @@ class MultiSourceResearchEngine:
             # Language mapping for GitHub API compatibility
             language_mapping = {
                 'jsx': 'javascript',  # JSX not recognized by GitHub
-                'tsx': 'typescript',  # TSX not recognized by GitHub  
+                'tsx': 'typescript',  # TSX not recognized by GitHub
                 'docker': 'dockerfile',  # Docker should be Dockerfile
             }
             github_language = language_mapping.get(language, language)
-            
-            logger.debug(f"   Fetching GitHub code examples{f' (language: {github_language})' if github_language else ' (all languages)'}...")
+
+            # Improve GitHub search query: extract meaningful keywords
+            # "Setting Up Python and Basic Syntax" → "Python syntax" or just "Python"
+            # This gives better results than the full lesson title
+            search_query = topic
+
+            # Remove common filler words that don't help GitHub search
+            filler_words = {'and', 'with', 'the', 'a', 'an', 'to', 'for', 'in', 'of', 'on', 'at', 'by', 'from',
+                          'setting', 'up', 'understanding', 'learning', 'introduction', 'guide', 'tutorial',
+                          'advanced', 'basic', 'fundamentals', 'basics', 'concepts', 'overview', 'getting', 'started'}
+
+            words = [w for w in topic.lower().split() if w not in filler_words]
+            if words:
+                # Use the most relevant keywords (usually the last 2-3 words contain the topic)
+                search_query = ' '.join(words[-2:] if len(words) > 2 else words)
+
+            logger.debug(f"   Fetching GitHub code examples (search: '{search_query}'){f' language: {github_language}' if github_language else ''}...")
             results = await self.github_service.search_code(
-                query=topic,
+                query=search_query,
                 language=github_language,  # Can be None - GitHub will search all languages
                 min_stars=100,
                 max_results=max_results
@@ -340,12 +355,13 @@ class MultiSourceResearchEngine:
         try:
             logger.debug(f"   Fetching Dev.to articles...")
 
-            # Convert topic to tag (e.g., "Python Variables" → "python")
-            tag = topic.lower().split()[0] if ' ' in topic else topic.lower()
+            # Dev.to API supports both query (free-form search) and tag (single keyword)
+            # Use query for full topic search to get better results
+            # This allows searching for "Variables and Data Types" instead of just "variables"
 
             # PHASE 2.1: New return type is tuple (results, tier_used)
             results, tier_used = await self.devto_service.search_articles(
-                tag=tag,
+                query=topic,  # Use full topic as query (e.g., "Variables and Data Types")
                 min_reactions=20,
                 max_results=max_results,
                 enable_tier_fallback=True  # Enable 2-tier fallback

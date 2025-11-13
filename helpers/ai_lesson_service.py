@@ -641,8 +641,57 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
                     params
                 )
 
+            # Clean up response: Extract JSON array/object
+            response_clean = response.strip()
+
+            # Try to extract JSON from markdown code blocks first
+            if '```json' in response_clean:
+                start = response_clean.find('```json') + 7
+                end = response_clean.find('```', start)
+                if end > start:
+                    response_clean = response_clean[start:end].strip()
+            elif '```' in response_clean:
+                start = response_clean.find('```') + 3
+                end = response_clean.find('```', start)
+                if end > start:
+                    response_clean = response_clean[start:end].strip()
+
+            # Find valid JSON boundaries (strict extraction)
+            json_start = -1
+            json_end = -1
+
+            # Look for JSON array [...]
+            if '[' in response_clean:
+                json_start = response_clean.find('[')
+                # Count brackets to find the matching closing bracket
+                bracket_count = 0
+                for i in range(json_start, len(response_clean)):
+                    if response_clean[i] == '[':
+                        bracket_count += 1
+                    elif response_clean[i] == ']':
+                        bracket_count -= 1
+                        if bracket_count == 0:
+                            json_end = i + 1
+                            break
+            # Look for JSON object {...}
+            elif '{' in response_clean:
+                json_start = response_clean.find('{')
+                # Count braces to find the matching closing brace
+                brace_count = 0
+                for i in range(json_start, len(response_clean)):
+                    if response_clean[i] == '{':
+                        brace_count += 1
+                    elif response_clean[i] == '}':
+                        brace_count -= 1
+                        if brace_count == 0:
+                            json_end = i + 1
+                            break
+
+            if json_start >= 0 and json_end > json_start:
+                response_clean = response_clean[json_start:json_end]
+
             # Parse JSON response
-            lesson_structure = json.loads(response)
+            lesson_structure = json.loads(response_clean)
 
             # Validate and enhance with duration info
             if not isinstance(lesson_structure, list):
@@ -691,7 +740,7 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
 
     def _get_current_ai_model(self) -> str:
         """Get the current AI model being used."""
-        if self.deepseek_api_key:
+        if self.openrouter_api_key:
             return 'deepseek-v3.1'
         elif self.groq_api_key:
             return 'groq-llama-3.3-70b'
@@ -836,7 +885,20 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
             kwargs["response_format"] = {"type": "json_object"}
         
         response = await self._deepseek_client.chat.completions.create(**kwargs)
-        return response.choices[0].message.content
+        message = response.choices[0].message
+
+        # DeepSeek R1 with reasoning outputs JSON in the reasoning field when json_mode is enabled
+        # Try content first, then reasoning
+        content = message.content
+        if not content and hasattr(message, 'reasoning') and message.reasoning:
+            logger.debug(f"📝 DeepSeek returned content in reasoning field (R1 behavior)")
+            content = message.reasoning
+
+        if not content:
+            logger.warning(f"⚠️ DeepSeek returned empty content and reasoning")
+            raise ValueError("DeepSeek returned empty response content")
+
+        return content
     
     async def _generate_with_groq(self, prompt: str, json_mode: bool = False, max_tokens: int = 8000) -> str:
         """
@@ -866,7 +928,13 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
             kwargs["response_format"] = {"type": "json_object"}
         
         response = await self._groq_client.chat.completions.create(**kwargs)
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+
+        if not content:
+            logger.warning(f"⚠️ Groq returned empty content: {response}")
+            raise ValueError("Groq returned empty response content")
+
+        return content
     
     async def _generate_with_gemini(self, prompt: str, json_mode: bool = False, max_tokens: int = 8000) -> str:
         """
@@ -911,7 +979,13 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
 
         # Generate content
         response = await model.generate_content_async(prompt)
-        return response.text
+        content = response.text
+
+        if not content:
+            logger.warning(f"⚠️ Gemini returned empty content: {response}")
+            raise ValueError("Gemini returned empty response content")
+
+        return content
     
     def get_model_usage_stats(self) -> Dict[str, int]:
         """Get statistics on which models were used"""
@@ -1801,8 +1875,15 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
         logger.info(f"🎥 Generating video lesson for: {request.step_title}")
 
         # Step 1: Search YouTube with quality ranking + duration filtering (Phase B)
+        # Add language context to search query for better specificity
+        search_query = request.step_title
+        if request.programming_language:
+            search_query = f"{request.programming_language} {request.step_title}"
+        elif request.category:
+            search_query = f"{request.category} {request.step_title}"
+
         video_data = self.youtube_service.search_and_rank(
-            request.step_title,
+            search_query,
             duration_min=request.video_duration_min,
             duration_max=request.video_duration_max
         )
@@ -2339,8 +2420,15 @@ Output only the description text, no quotes or extra formatting.'''.format(
         text_content = self._parse_mixed_text(text_response) if text_response else {}
         
         # 2. Video component - Phase C: simplified (no transcript needed)
+        # Add language context to search query for better specificity
+        search_query = request.step_title
+        if request.programming_language:
+            search_query = f"{request.programming_language} {request.step_title}"
+        elif request.category:
+            search_query = f"{request.category} {request.step_title}"
+
         video_data = self.youtube_service.search_and_rank(
-            request.step_title,
+            search_query,
             duration_min=request.video_duration_min,
             duration_max=request.video_duration_max
         )
@@ -2657,6 +2745,7 @@ Generate for: {request.step_title}"""
                         user_profile=user_profile or {},
                         difficulty=module.difficulty,
                         category=getattr(module, 'category', None),
+                        programming_language=getattr(module, 'programming_language', None) or getattr(module.roadmap, 'goal_input', '').split()[0].lower() if hasattr(module, 'roadmap') else None,
                         enable_research=True,
                         video_duration_min=video_duration_min,  # Phase B: Duration-aware video selection
                         video_duration_max=video_duration_max   # Phase B: Duration-aware video selection
@@ -2687,7 +2776,7 @@ Generate for: {request.step_title}"""
                         title=lesson_title,  # Store lesson title explicitly
                         content=lesson_data.get('content', {}),
                         learning_style=learning_style,
-                        difficulty=module.difficulty,
+                        difficulty_level=module.difficulty,
                         source_type='ai_only',
                         source_attribution=source_attribution
                     )

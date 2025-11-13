@@ -150,7 +150,8 @@ class YouTubeService:
             search_query = f"{topic}"
             logger.info(f"🔍 Searching YouTube: {search_query}")
 
-            # First try: Get videos WITH captions
+            # Search for videos (Phase D: caption filter removed)
+            # We no longer require captions since videos are used as reference material only
             search_response = youtube.search().list(
                 q=search_query,
                 part='snippet',
@@ -159,37 +160,18 @@ class YouTubeService:
                 order='relevance',
                 videoDuration='medium',  # 4-20 minutes
                 videoDefinition='high',
-                videoCaption='closedCaption',  # Prefer captioned videos
                 relevanceLanguage='en'
             ).execute()
 
-            # Track if caption filter search returned results
-            caption_filter_worked = bool(search_response.get('items'))
-            logger.info(f"[search_and_rank] Caption filter worked: {caption_filter_worked}, found {len(search_response.get('items', []))} videos")
-            print(f"[search_and_rank] Caption filter worked: {caption_filter_worked}", flush=True)
-
-            # Fallback: If no captioned videos, get any relevant videos
+            # Check if search returned results
             if not search_response.get('items'):
-                logger.warning("⚠️ No videos with captions found, trying without caption filter...")
-                print("⚠️ No videos with captions found, trying without caption filter...", flush=True)
-                search_response = youtube.search().list(
-                    q=search_query,
-                    part='snippet',
-                    type='video',
-                    maxResults=10,
-                    order='relevance',
-                    videoDuration='medium',
-                    videoDefinition='high',
-                    relevanceLanguage='en'
-                ).execute()
+                logger.warning("⚠️ No YouTube videos found for query")
+                print("⚠️ No YouTube videos found at all", flush=True)
+                return None
 
-                if not search_response.get('items'):
-                    logger.warning("⚠️ No YouTube videos found")
-                    print("⚠️ No YouTube videos found at all", flush=True)
-                    return None
-
-                logger.info(f"[search_and_rank] Fallback search found {len(search_response.get('items', []))} videos")
-                print(f"[search_and_rank] Fallback search found {len(search_response.get('items', []))} videos", flush=True)
+            found_count = len(search_response.get('items', []))
+            logger.info(f"[search_and_rank] Search found {found_count} videos")
+            print(f"[search_and_rank] Found {found_count} videos", flush=True)
 
             # Get detailed stats for top N results
             video_ids = [item['id']['videoId'] for item in search_response['items'][:max_results]]
@@ -243,7 +225,7 @@ class YouTubeService:
                         'is_verified': False,
                     }
 
-                # Build video metadata (Phase B: removed transcript verification)
+                # Build video metadata (Phase D: removed caption filter requirement)
                 # Transcripts are no longer required - we use videos as reference material only
                 video_data = {
                     'video_id': video_id,
@@ -257,7 +239,6 @@ class YouTubeService:
                     'view_count': int(video_details['statistics'].get('viewCount', 0)),
                     'like_count': int(video_details['statistics'].get('likeCount', 0)),
                     'published_at': video_details['snippet']['publishedAt'],
-                    'caption_filter_matched': caption_filter_worked,  # Track if from caption-filtered search
                     **channel_data,
                 }
 

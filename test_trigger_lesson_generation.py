@@ -18,6 +18,7 @@ import json
 import argparse
 import requests
 import django
+import time
 from datetime import datetime
 
 # Setup Django
@@ -285,6 +286,48 @@ def trigger_lesson_generation(module_id, access_token, api_url):
         print(response.text[:500])
 
 
+def check_generation_status(module_id, api_url, max_attempts=60, poll_interval=5):
+    """Poll module generation status until completed or timeout."""
+    print(f"\n[POLL] Monitoring generation status (max {max_attempts} attempts)...")
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            # Query module status via REST API
+            response = requests.get(
+                f"{api_url.replace('/graphql/', '/api/modules/')}{module_id}/status/",
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                status = data.get('generation_status', 'unknown')
+                error = data.get('generation_error', '')
+                lessons = data.get('lessons_count', 0)
+
+                print(f"[{attempt}/{max_attempts}] Status: {status} | Lessons: {lessons} | Error: {error[:60] if error else 'None'}")
+
+                if status == 'completed':
+                    print(f"[OK] Generation completed! {lessons} lessons created.")
+                    return True
+                elif status == 'failed':
+                    print(f"[X] Generation failed: {error}")
+                    return False
+                elif status in ['queued', 'in_progress']:
+                    if attempt < max_attempts:
+                        time.sleep(poll_interval)
+                        continue
+            else:
+                print(f"[{attempt}/{max_attempts}] Status check failed: {response.status_code}")
+        except Exception as e:
+            print(f"[{attempt}/{max_attempts}] Error checking status: {e}")
+
+        if attempt < max_attempts:
+            time.sleep(poll_interval)
+
+    print(f"[X] Timeout: Generation did not complete in {max_attempts * poll_interval} seconds")
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description='Trigger lesson generation for a module')
     parser.add_argument('--module-id', help='Module ID to generate lessons for')
@@ -295,6 +338,8 @@ def main():
     parser.add_argument('--user-email', help='Filter modules by user email')
     parser.add_argument('--api-url', default='http://localhost:8000/graphql/',
                         help='GraphQL API URL (default: http://localhost:8000/graphql/)')
+    parser.add_argument('--poll', action='store_true', help='Poll for completion after triggering')
+    parser.add_argument('--timeout', type=int, default=300, help='Max seconds to wait for completion')
 
     args = parser.parse_args()
 
@@ -324,6 +369,11 @@ def main():
 
     # Trigger generation
     trigger_lesson_generation(args.module_id, access_token, args.api_url)
+
+    # Poll for completion if requested
+    if args.poll:
+        max_polls = args.timeout // 5
+        check_generation_status(args.module_id, args.api_url, max_attempts=max_polls, poll_interval=5)
 
 
 if __name__ == '__main__':
