@@ -50,6 +50,8 @@ class LessonRequest:
     category: Optional[str] = None  # e.g., 'python', 'javascript', 'react'
     programming_language: Optional[str] = None  # e.g., 'python', 'javascript'
     enable_research: bool = True  # Enable multi-source research (default: True)
+    video_duration_min: Optional[int] = None  # Phase B: Adaptive video duration (beginner: 5-10 min)
+    video_duration_max: Optional[int] = None  # Phase B: Adaptive video duration (advanced: 40-60 min)
 
 
 @dataclass
@@ -1776,19 +1778,23 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
     async def _generate_video_lesson(self, request: LessonRequest, research_data: Optional[Dict] = None) -> Dict[str, Any]:
         """
         Generate video-based lesson with YouTube content + AI analysis.
-        
+
         Flow:
-        1. Search YouTube for best tutorial video
+        1. Search YouTube for best tutorial video (Phase B: with duration matching)
         2. Fetch video transcript/captions
         3. Gemini analyzes transcript (with research context!)
         4. Generate study guide, timestamps, quiz
-        
+
         Result: Video player + AI-curated notes (verified with research)
         """
         logger.info(f"🎥 Generating video lesson for: {request.step_title}")
-        
-        # Step 1: Search YouTube with quality ranking
-        video_data = self.youtube_service.search_and_rank(request.step_title)
+
+        # Step 1: Search YouTube with quality ranking + duration filtering (Phase B)
+        video_data = self.youtube_service.search_and_rank(
+            request.step_title,
+            duration_min=request.video_duration_min,
+            duration_max=request.video_duration_max
+        )
 
         if not video_data:
             logger.warning(f"⚠️ No YouTube video found for: {request.step_title}")
@@ -2309,8 +2315,12 @@ Output only the description text, no quotes or extra formatting.'''.format(
         text_response = await self._generate_with_ai(text_prompt, json_mode=False, max_tokens=4000)
         text_content = self._parse_mixed_text(text_response) if text_response else {}
         
-        # 2. Video component (with optional transcript analysis)
-        video_data = self.youtube_service.search_and_rank(request.step_title)
+        # 2. Video component (with optional transcript analysis) - Phase B: with duration matching
+        video_data = self.youtube_service.search_and_rank(
+            request.step_title,
+            duration_min=request.video_duration_min,
+            duration_max=request.video_duration_max
+        )
 
         # 2b. Try to get transcript for video analysis (YouTube or Groq fallback)
         video_analysis = {}
@@ -2631,7 +2641,7 @@ Generate for: {request.step_title}"""
                     logger.debug(f"     Search query: {search_query}")
                     logger.debug(f"     Duration: {video_duration_min}-{video_duration_max} min")
 
-                    # Create lesson request with lesson structure info
+                    # Create lesson request with lesson structure info + duration for video selection
                     lesson_request = LessonRequest(
                         step_title=lesson_title,  # Use specific lesson title, not module title
                         lesson_number=lesson_num,
@@ -2639,7 +2649,9 @@ Generate for: {request.step_title}"""
                         user_profile=user_profile or {},
                         difficulty=module.difficulty,
                         category=getattr(module, 'category', None),
-                        enable_research=True
+                        enable_research=True,
+                        video_duration_min=video_duration_min,  # Phase B: Duration-aware video selection
+                        video_duration_max=video_duration_max   # Phase B: Duration-aware video selection
                     )
 
                     # Generate lesson content

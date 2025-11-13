@@ -92,21 +92,33 @@ class YouTubeService:
             logger.error(f"[X] Failed to build YouTube API service: {e}")
             return None
 
-    def search_and_rank(self, topic: str, max_results: int = 3, include_caption_status: bool = True) -> Optional[Dict]:
+    def search_and_rank(
+        self,
+        topic: str,
+        max_results: int = 3,
+        include_caption_status: bool = True,
+        duration_min: Optional[int] = None,
+        duration_max: Optional[int] = None
+    ) -> Optional[Dict]:
         """
         Search YouTube for best tutorial video with smart filtering.
 
         Priority filter (top 3 results):
-        1. Has transcript (YouTube captions)
+        1. Duration within specified range (if provided)
         2. Like ratio > 0.85 (quality content)
         3. View count > 10,000 (established content)
 
-        Fallback: Try Groq transcription on top result (once)
-        Skip: If Groq fails, skip YouTube (don't block generation)
+        Note: Transcript verification removed (Phase B).
+        Videos are selected based on:
+        - YouTube's caption filter (indicates captions exist)
+        - Duration matching (adaptive per user skill level)
+        - Quality metrics (likes, views, channel authority)
 
         Args:
             topic: Topic to search for
             max_results: Number of top results to consider
+            duration_min: Minimum video duration in minutes (optional)
+            duration_max: Maximum video duration in minutes (optional)
 
         Returns:
             Video metadata with quality indicators or None
@@ -182,10 +194,24 @@ class YouTubeService:
             if not video_response.get('items'):
                 return None
 
-            # Enrich videos with channel and transcript info
+            # Enrich videos with channel info and duration filtering
             videos_to_rank = []
             for video_details in video_response['items']:
                 video_id = video_details['id']
+                duration_minutes = self._parse_youtube_duration(
+                    video_details['contentDetails']['duration']
+                )
+
+                # PHASE B: Filter by duration if specified
+                # This enables adaptive video selection based on user's skill level and time commitment
+                if duration_min is not None or duration_max is not None:
+                    if duration_min and duration_minutes < duration_min:
+                        logger.debug(f"   ⏭️  Video too short ({duration_minutes}m < {duration_min}m), skipping")
+                        continue
+                    if duration_max and duration_minutes > duration_max:
+                        logger.debug(f"   ⏭️  Video too long ({duration_minutes}m > {duration_max}m), skipping")
+                        continue
+                    logger.debug(f"   ✅ Duration matches: {duration_minutes}m ({duration_min}-{duration_max}m)")
 
                 try:
                     # Get channel info for authority scoring
@@ -210,30 +236,8 @@ class YouTubeService:
                         'is_verified': False,
                     }
 
-                # Determine transcript availability
-                # CRITICAL: YouTube's caption filter shows videos with captions, but NOT all captions are extractable as transcripts
-                # Some creators disable transcript availability while keeping subtitles enabled
-                # We MUST verify actual transcript accessibility via youtube-transcript-api
-                if caption_filter_worked:
-                    # Even though caption filter worked, verify the transcript is actually accessible
-                    # This catches the case where creator has subtitles but disabled transcripts
-                    logger.debug(f"   🔍 Caption filter matched, verifying transcript accessibility...")
-                    print(f"   [search_and_rank] Verifying transcript for {video_id}...", flush=True)
-                    has_transcript = self.transcript_service.has_transcript(video_id)
-                    print(f"   [search_and_rank] has_transcript({video_id}) returned: {has_transcript}", flush=True)
-                    if has_transcript:
-                        logger.debug(f"   ✅ Verified: Video has accessible transcripts")
-                        print(f"   ✅ [search_and_rank] Video {video_id} verified: HAS TRANSCRIPTS", flush=True)
-                    else:
-                        logger.debug(f"   ⚠️ Video has captions but transcripts are disabled (creator restriction)")
-                        print(f"   ⚠️ [search_and_rank] Video {video_id}: Captions exist but transcripts DISABLED", flush=True)
-                else:
-                    # Fallback search: skip transcript checking to avoid rate limiting
-                    # These videos don't have captions anyway
-                    has_transcript = False
-                    logger.debug(f"   ⚠️ Video from fallback search (no captions, no transcripts)")
-
-                # Build video metadata
+                # Build video metadata (Phase B: removed transcript verification)
+                # Transcripts are no longer required - we use videos as reference material only
                 video_data = {
                     'video_id': video_id,
                     'title': video_details['snippet']['title'],
@@ -242,21 +246,18 @@ class YouTubeService:
                     'thumbnail_url': video_details['snippet']['thumbnails']['high']['url'],
                     'video_url': f'https://www.youtube.com/watch?v={video_id}',
                     'embed_url': f'https://www.youtube.com/embed/{video_id}',
-                    'duration_minutes': self._parse_youtube_duration(
-                        video_details['contentDetails']['duration']
-                    ),
+                    'duration_minutes': duration_minutes,
                     'view_count': int(video_details['statistics'].get('viewCount', 0)),
                     'like_count': int(video_details['statistics'].get('likeCount', 0)),
                     'published_at': video_details['snippet']['publishedAt'],
-                    'has_transcript': has_transcript,
                     'caption_filter_matched': caption_filter_worked,  # Track if from caption-filtered search
                     **channel_data,
                 }
 
                 logger.info(
-                    f"📊 Video {video_id}: views={video_data['view_count']:,}, "
-                    f"likes={video_data['like_count']:,}, "
-                    f"transcript={'✅' if has_transcript else '❌'}"
+                    f"📊 Video {video_id}: {duration_minutes}m duration, "
+                    f"views={video_data['view_count']:,}, "
+                    f"likes={video_data['like_count']:,}"
                 )
 
                 videos_to_rank.append(video_data)
@@ -265,12 +266,7 @@ class YouTubeService:
                 logger.warning("❌ No videos to rank")
                 return None
 
-            # Summary of transcript verification
-            videos_with_transcript = sum(1 for v in videos_to_rank if v.get('has_transcript'))
-            logger.info(f"[search_and_rank] Videos with accessible transcripts: {videos_with_transcript}/{len(videos_to_rank)}")
-            print(f"[search_and_rank] {videos_with_transcript}/{len(videos_to_rank)} videos have accessible transcripts", flush=True)
-
-            # Rank videos by quality
+            # Rank videos by quality (Phase B: no longer requires transcripts)
             logger.info(f"[search_and_rank] About to rank {len(videos_to_rank)} videos")
             print(f"[search_and_rank] About to rank {len(videos_to_rank)} videos with topic '{topic}'", flush=True)
             ranked = self.quality_ranker.rank_videos(videos_to_rank, topic, max_results=1)
@@ -279,29 +275,13 @@ class YouTubeService:
 
             if not ranked:
                 logger.warning("❌ No videos passed quality threshold")
-                print("❌ No videos passed quality threshold, trying Groq fallback", flush=True)
-                # Fallback: Try Groq on best available
+                print("❌ No videos passed quality threshold", flush=True)
+                # PHASE B: No fallback to Groq transcription - we don't need transcripts anymore
+                # If no videos passed quality, return None and let lesson generation skip YouTube video
                 if videos_to_rank:
                     best_video = videos_to_rank[0]
-                    logger.warning(f"⚠️ No perfect match, trying Groq transcription on: {best_video['video_id']}")
-                    print(f"⚠️ No perfect match, trying Groq transcription on: {best_video['video_id']}", flush=True)
-
-                    if self.groq_api_key and self.transcript_service.groq_transcription:
-                        print(f"[search_and_rank] Calling groq_transcription.transcribe() for {best_video['video_id']}", flush=True)
-                        transcript = self.transcript_service.groq_transcription.transcribe(
-                            best_video['video_id']
-                        )
-                        if transcript:
-                            logger.info("✅ Groq transcription successful")
-                            print("✅ Groq transcription successful", flush=True)
-                            return best_video
-                        else:
-                            logger.warning("❌ Groq transcription failed")
-                            print("❌ Groq transcription failed", flush=True)
-                            return None
-                    else:
-                        print("[search_and_rank] Groq not available (no API key or groq_transcription)", flush=True)
-                        return None
+                    logger.info(f"⚠️ No perfect match, returning best available: {best_video['video_id']}")
+                    return best_video
                 return None
 
             best_video = ranked[0]
