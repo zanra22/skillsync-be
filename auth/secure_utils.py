@@ -73,13 +73,19 @@ class SecureTokenManager:
             # but WILL be sent back on subsequent requests to localhost:8000
             cookie_domain = None
 
+        # 🔑 COOKIE FIX: Use SameSite=Lax for cross-origin cookies
+        # Modern browsers (Chrome 80+) block SameSite=None without Secure=True
+        # SameSite=Lax works for localhost:3000 → localhost:8000 (same-site)
+        samesite_value = 'Lax'  # Lax works for both dev and prod
+        secure_value = False if settings.DEBUG else True  # False in dev, True in prod
+
         response.set_cookie(
             'refresh_token',
             refresh_token,
             max_age=max_age,  # 🔑 Dynamic based on remember_me
             httponly=True,  # Prevents XSS
-            secure=not settings.DEBUG,
-            samesite='Lax',  # Works for same-site (localhost:3000 → localhost:8000)
+            secure=secure_value,  # False in dev, True in prod
+            samesite=samesite_value,  # Lax allows same-site requests
             path='/',
             domain=cookie_domain,
         )
@@ -90,8 +96,8 @@ class SecureTokenManager:
             fingerprint,
             max_age=max_age,  # Match refresh token duration
             httponly=True,
-            secure=not settings.DEBUG,
-            samesite='Lax',  # 🔑 CRITICAL: Must be Lax for cross-domain cookies
+            secure=secure_value,  # Match refresh token
+            samesite=samesite_value,  # Match refresh token
             path='/',
             domain=cookie_domain,
         )
@@ -106,16 +112,13 @@ class SecureTokenManager:
             fp_hash,
             max_age=max_age,  # Match refresh token duration
             httponly=True,
-            secure=not settings.DEBUG,
-            samesite='Lax',  # 🔑 CRITICAL: Must be Lax for cross-domain cookies
+            secure=secure_value,  # Match refresh token
+            samesite=samesite_value,  # Match refresh token
             path='/',
             domain=cookie_domain,
         )
 
         # Debug logging
-        samesite_value = 'Lax'  # Always Lax for cross-domain support
-        secure_value = not settings.DEBUG
-
         print(f"✅ Set authentication cookies:")
         print(f"   refresh_token: {refresh_token[:30]}...")
         print(f"   client_fp: {fingerprint[:20]}...")

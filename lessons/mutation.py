@@ -126,7 +126,8 @@ from .types import (
     RegenerateLessonInput,
     RegenerateLessonPayload,
     MentorReviewInput,
-    MentorReviewPayload
+    MentorReviewPayload,
+    LessonContentType
 )
 from helpers.ai_lesson_service import LessonGenerationService, LessonRequest
 
@@ -785,11 +786,192 @@ class LessonsMutation:
                 # Refresh module to get updated status
                 await module.arefresh_from_db()
 
-                return module
-
         except Exception as e:
             logger.error(f"❌ Failed to generate module lessons: {e}", exc_info=True)
             raise Exception(f"Failed to generate module lessons: {str(e)}")
+    
+    @strawberry.mutation
+    async def generate_lesson_content(
+        self,
+        info,
+        lesson_id: str
+    ) -> LessonContentType:
+        """
+        Generate full content for a single lesson skeleton (ON-DEMAND).
+        
+        PHASE 2: ON-DEMAND GENERATION
+        
+        This mutation generates content for a lesson that has generation_status='pending'.
+        It's called when a user clicks on a lesson to view it.
+        
+        Flow:
+        1. Validates user has access to the lesson
+        2. Calls LessonGenerationService.generate_single_lesson_content()
+        3. Returns the updated lesson with full content
+        
+        Args:
+            lesson_id: ID of the lesson to generate content for
+        
+        Returns:
+            LessonContentType with generated content
+        
+        Example:
+            mutation {
+                generateLessonContent(lessonId: "abc123") {
+                    id
+                    title
+                    generationStatus
+                    content
+                }
+            }
+        """
+        from lessons.models import LessonContent
+        from django.contrib.auth import get_user_model
+        
+        User = get_user_model()
+        request = info.context.request
+        
+        # Support both JWT authentication and Azure Function X-User-Id header
+        user = request.user
+        user_id_from_header = request.headers.get('X-User-Id')
+        
+        if user_id_from_header:
+            # Azure Function request - use user ID from header
+            logger.info(f"🎯 [Mutation] Azure Function request for lesson: {lesson_id}")
+            try:
+                user = await User.objects.aget(id=user_id_from_header)
+                logger.info(f"   User from header: {user.email}")
+            except User.DoesNotExist:
+                raise Exception(f"User not found: {user_id_from_header}")
+        elif not user.is_authenticated:
+            # Regular request without authentication
+            raise Exception("Authentication required")
+        else:
+            # Regular JWT authenticated request
+            logger.info(f"🎯 [Mutation] Generate lesson content: {lesson_id} (user: {user.email})")
+        
+        try:
+            # Fetch the lesson
+            lesson = await sync_to_async(LessonContent.objects.select_related('module__roadmap').get)(id=lesson_id)
+            
+            # Verify user has access to this lesson
+            if str(lesson.module.roadmap.user_id) != str(user.id):
+                raise Exception("You don't have access to this lesson")
+            
+            # Generate content using service
+            service = LessonGenerationService()
+            try:
+                success = await service.generate_single_lesson_content(lesson_id)
+                
+                if not success:
+                    raise Exception("Lesson generation failed")
+                
+                # Refresh lesson from DB to get updated content
+                await lesson.arefresh_from_db()
+                
+                logger.info(f"✅ Lesson content generated: {lesson_id}")
+                return lesson
+                
+            finally:
+                await service.cleanup()
+        
+        except LessonContent.DoesNotExist:
+            logger.error(f"❌ Lesson not found: {lesson_id}")
+            raise Exception(f"Lesson not found: {lesson_id}")
+        except Exception as e:
+            logger.error(f"❌ Failed to generate lesson content: {e}", exc_info=True)
+            raise Exception(f"Failed to generate lesson content: {str(e)}")
+
+
+    @strawberry.mutation
+    async def generate_lesson_skeletons(
+        self,
+        info,
+        module_id: str
+    ) -> ModuleType:
+        """
+        FAILSAFE: Generate lesson skeletons for a module that has no lessons.
+        
+        This is a manual failsafe for when onboarding skeleton generation fails.
+        Users can click a "Generate Lessons" button to trigger this.
+        
+        Args:
+            info: GraphQL context
+            module_id: Module ID to generate skeletons for
+            
+        Returns:
+            ModuleType with lesson skeletons created
+            
+        Example:
+            mutation {
+                lessons {
+                    generateLessonSkeletons(moduleId: "abc123") {
+                        id
+                        title
+                        lessons {
+                            id
+                            title
+                            generationStatus
+                        }
+                    }
+                }
+            }
+        """
+        user = info.context.request.user
+        
+        if not user.is_authenticated:
+            raise Exception("Authentication required")
+        
+        try:
+            # Get module with ownership verification
+            module = await Module.objects.select_related('roadmap').filter(
+                id=module_id,
+                roadmap__user_id=str(user.id)
+            ).afirst()
+            
+            if not module:
+                raise Exception("Module not found or you don't have permission")
+            
+            # Check if module already has lessons
+            lesson_count = await sync_to_async(module.lessons.count)()
+            if lesson_count > 0:
+                logger.info(f"✅ Module already has {lesson_count} lessons, skipping skeleton generation")
+                return module
+            
+            logger.info(f"🚀 [Failsafe] Generating lesson skeletons for module: {module.title}")
+            
+            # Get user profile for personalization
+            from helpers.ai_lesson_service import LessonGenerationService
+            
+            user_profile = {
+                'learning_style': 'hands_on',
+                'learning_pace': 'moderate',
+                'time_commitment_hours': 5.0,
+            }
+            
+            # Generate skeletons
+            lesson_service = LessonGenerationService()
+            try:
+                skeleton_count = await lesson_service.generate_lessons_for_module(
+                    module=module,
+                    user_profile=user_profile
+                )
+                
+                logger.info(f"✅ [Failsafe] Created {skeleton_count} lesson skeletons")
+                
+                if skeleton_count == 0:
+                    raise Exception("Failed to create lesson skeletons")
+                
+                # Refresh module to get updated lessons
+                await module.arefresh_from_db()
+                return module
+                
+            finally:
+                await lesson_service.cleanup()
+        
+        except Exception as e:
+            logger.error(f"❌ [Failsafe] Failed to generate skeletons: {e}", exc_info=True)
+            raise Exception(f"Failed to generate lesson skeletons: {str(e)}")
 
 
 # Export for schema registration

@@ -79,6 +79,10 @@ class UserProfile:
     learning_style: str
     time_commitment: str
     goals: List['LearningGoal']
+    # ✅ NEW: Additional personalization fields from onboarding
+    first_name: Optional[str] = None  # For personalized greetings
+    current_role: Optional[str] = None  # Current profession (e.g., "Software Engineer", "Teacher")
+    transition_timeline: Optional[str] = None  # Career transition timeline (e.g., "Within 6 months")
 
 @dataclass
 class RoadmapStep:
@@ -123,18 +127,18 @@ class HybridRoadmapService:
         Best-effort cleanup for any async clients created by the HybridRoadmapService.
         Call this before shutting down the event loop to avoid Windows Proactor finalizer warnings.
         """
-        # Close DeepSeek/OpenRouter client
-        if getattr(self, '_deepseek_client', None):
+        # Close OpenRouter client
+        if getattr(self, '_openrouter_client', None):
             try:
-                await self._deepseek_client.close()
-                logger.debug("🧹 Closed DeepSeek/OpenRouter client")
+                await self._openrouter_client.close()
+                logger.debug("🧹 Closed OpenRouter client")
             except Exception:
                 try:
-                    self._deepseek_client.close()
+                    self._openrouter_client.close()
                 except Exception:
                     pass
             finally:
-                self._deepseek_client = None
+                self._openrouter_client = None
 
         # Close Groq client
         if getattr(self, '_groq_client', None):
@@ -197,7 +201,10 @@ class HybridRoadmapService:
 
         # 1. Create or get roadmap
         goal_input = getattr(roadmap, 'skill_name', '')
-        ai_title = await self.generate_title_from_goal(goal_input)
+        # PHASE 2: Pass user_profile and learning_goal for context-aware title generation
+        # Extract first learning goal from user_profile (LearningGoal dataclass, not LearningRoadmap)
+        learning_goal = user_profile.goals[0] if user_profile and hasattr(user_profile, 'goals') and user_profile.goals else None
+        ai_title = await self.generate_title_from_goal(goal_input, user_profile, learning_goal)
         cache_key = RoadmapModel.generate_cache_key(
             title=goal_input,
             user_id=str(getattr(user_profile, 'user_id', '')),
@@ -260,15 +267,55 @@ class HybridRoadmapService:
                 )
             modules.append(module_obj)
 
-            # ON-DEMAND GENERATION STRATEGY:
-            # Don't enqueue modules immediately - lessons will be generated
-            # when user clicks on module (via separate GraphQL mutation)
-            # This saves 60-80% on AI costs by only generating what users view
+            # SKELETON GENERATION STRATEGY (Phase 1):
+            # Create lesson skeletons immediately during onboarding
+            # - User sees full roadmap structure instantly
+            # - Lessons have status='pending' until user requests them
+            # - Full content generated on-demand when user clicks lesson
+            
+            from helpers.ai_lesson_service import LessonGenerationService
+            
+            lesson_service = LessonGenerationService()
+            
+            # Convert user_profile to dict for lesson service
+            profile_dict = {}
+            if user_profile:
+                if isinstance(user_profile, dict):
+                    profile_dict = user_profile
+                else:
+                    # Extract relevant fields from user_profile object
+                    profile_dict = {
+                        'learning_style': getattr(user_profile, 'learning_style', 'hands_on'),
+                        'learning_pace': getattr(user_profile, 'learning_pace', 'moderate'),
+                        'time_commitment_hours': getattr(user_profile, 'time_commitment_hours', 5.0),
+                    }
+            
+            # Generate lesson skeletons for this module with retry logic
+            max_retries = 2
+            for attempt in range(max_retries):
+                try:
+                    skeleton_count = await lesson_service.generate_lessons_for_module(
+                        module=module_obj,
+                        user_profile=profile_dict
+                    )
+                    logger.info(f"   ✅ Created {skeleton_count} lesson skeletons for: {module_obj.title}")
+                    lessons_by_module[module_obj.title] = []  # Skeletons stored in DB, not returned here
+                    break  # Success - exit retry loop
+                except Exception as skeleton_error:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"   ⚠️ Attempt {attempt + 1} failed for {module_obj.title}: {skeleton_error}. Retrying...")
+                        await asyncio.sleep(2)  # Wait 2 seconds before retry
+                    else:
+                        logger.error(f"   ❌ Failed to create skeletons for {module_obj.title} after {max_retries} attempts: {skeleton_error}")
+                        lessons_by_module[module_obj.title] = []
 
-            # Return empty lessons for now - they'll be generated on-demand
-            lessons_by_module[module_obj.title] = []
+        # Cleanup lesson service AFTER all modules are processed
+        try:
+            await lesson_service.cleanup()
+        except Exception as cleanup_error:
+            logger.warning(f"⚠️ Lesson service cleanup error: {cleanup_error}")
 
-        logger.info(f"[RoadmapSave] Modules created: {len(modules)}. Lessons will be generated on-demand when user views modules.")
+        logger.info(f"[RoadmapSave] Modules created: {len(modules)}. Lesson skeletons created for on-demand generation.")
         return roadmap_obj, modules, lessons_by_module
     
     async def enqueue_module_for_generation(self, module_obj, user_profile, request_key=None):
@@ -417,27 +464,139 @@ class HybridRoadmapService:
             except Exception as inner_e:
                 logger.error(f"❌ Error updating module status: {inner_e}")
 
-    async def generate_title_from_goal(self, goal_input: str) -> str:
+    async def generate_title_from_goal(
+        self,
+        goal_input: str,
+        user_profile: Optional['UserProfile'] = None,
+        learning_goal: Optional['LearningGoal'] = None
+    ) -> str:
         """
-        Use Hybrid AI to generate a meaningful roadmap title from the raw goal input.
-        """
-        import re
-        keywords = re.findall(r'Python|JavaScript|Data Science|Career|Development|Beginner|Advanced', goal_input, re.IGNORECASE)
-        if keywords:
-            base = ' '.join(keywords)
-            return f"{base.title()} Roadmap"
-        return f"{goal_input.strip().title()} Roadmap"
+        PHASE 2: Generate context-aware roadmap title using user profile and learning goal.
 
-    async def generate_title_from_goal(self, goal_input: str) -> str:
+        Uses AI to create personalized titles that reflect:
+        - Career stage (student, professional, career_changer)
+        - Industry context
+        - Target skill level
+        - Time commitment/urgency
+
+        Examples:
+        - Student: "Python Fundamentals: 12-Week Beginner"
+        - Professional: "Advanced Python for Finance"
+        - Career Changer: "Python for Career Shifters: Finance→Tech"
+        - Senior: "Python Advanced Patterns: Executive Track"
+
+        Falls back to simple title if user_profile not provided.
         """
-        Use Hybrid AI to generate a meaningful roadmap title from the raw goal input.
-        """
-        import re
-        keywords = re.findall(r'Python|JavaScript|Data Science|Career|Development|Beginner|Advanced', goal_input, re.IGNORECASE)
-        if keywords:
-            base = ' '.join(keywords)
-            return f"{base.title()} Roadmap"
-        return f"{goal_input.strip().title()} Roadmap"
+        # Fallback: If no user profile provided, use simple regex-based title
+        if not user_profile or not learning_goal:
+            import re
+            keywords = re.findall(
+                r'Python|JavaScript|Data Science|Career|Development|Beginner|Advanced',
+                goal_input,
+                re.IGNORECASE
+            )
+            if keywords:
+                base = ' '.join(keywords)
+                return f"{base.title()} Roadmap"
+            return f"{goal_input.strip().title()} Roadmap"
+
+        # PHASE 2: AI-powered context-aware title generation
+        logger.info(f"🎯 Generating context-aware roadmap title for: {learning_goal.skill_name}")
+
+        # Build context about the learner
+        career_stage_desc = {
+            'student': 'a student building foundational knowledge',
+            'entry_level': 'an entry-level professional transitioning into the field',
+            'mid_level': 'a mid-level professional expanding expertise',
+            'senior_level': 'a senior professional adding specialized skills',
+            'career_changer': 'a career changer transitioning from a different field',
+            'executive': 'an executive or decision-maker upskilling',
+        }.get(user_profile.career_stage, user_profile.career_stage)
+
+        # ✅ PHASE 5: Build personalized greeting and transition context
+        greeting = f"{user_profile.first_name}, " if user_profile.first_name else ""
+
+        # Add career transition context for career changers
+        transition_context = ""
+        if user_profile.career_stage == 'career_changer' and user_profile.current_role:
+            transition_context = f"\n- Current Role: {user_profile.current_role}"
+            if user_profile.transition_timeline:
+                transition_context += f"\n- Timeline: {user_profile.transition_timeline}"
+
+        # Add professional context for working professionals
+        professional_context = ""
+        if user_profile.career_stage in ['mid_level', 'senior_level'] and user_profile.current_role:
+            professional_context = f"\n- Current Position: {user_profile.current_role}"
+
+        prompt = f"""Create a compelling, personalized roadmap title for {greeting}this learner.
+
+Learner Context:
+- Role: {career_stage_desc}
+- Industry: {user_profile.industry}{transition_context}{professional_context}
+- Learning Style: {user_profile.learning_style}
+- Time Commitment: {user_profile.time_commitment} hours/week
+- Target Level: {learning_goal.target_skill_level}
+
+Learning Goal: Master {learning_goal.skill_name}
+
+Generate a SINGLE title (not multiple) that:
+1. Shows the learner's context (career stage, industry transition if applicable)
+2. Indicates progression from their current state
+3. Feels personalized and motivating
+4. Is concise (under 70 characters if possible)
+5. Includes the skill name ({learning_goal.skill_name})
+
+Format: Just return the title text only, no quotes, no explanation.
+
+Example formats:
+- For students: "{learning_goal.skill_name} Fundamentals: [duration]"
+- For professionals: "Advanced {learning_goal.skill_name} for [Industry]"
+- For career changers: "{learning_goal.skill_name} for Career Shifters: [From]→[To]"
+- For seniors: "{learning_goal.skill_name} Advanced: Executive Track"
+
+Your title:"""
+
+        try:
+            # Try DeepSeek V3.1 first
+            title = None
+            if self.openrouter_api_key:
+                try:
+                    title = await self._generate_with_deepseek_v31(prompt, max_tokens=100)
+                except Exception as e:
+                    logger.warning(f"⚠️ DeepSeek V3.1 title generation failed: {e}")
+
+            # Fallback to Groq
+            if not title and self.groq_api_key:
+                try:
+                    title = await self._generate_with_groq(prompt, max_tokens=100)
+                except Exception as e:
+                    logger.warning(f"⚠️ Groq title generation failed: {e}")
+
+            # Fallback to Gemini
+            if not title and self.gemini_api_key:
+                try:
+                    title = await self._generate_with_gemini(prompt, max_tokens=100)
+                except Exception as e:
+                    logger.warning(f"⚠️ Gemini title generation failed: {e}")
+
+            if not title:
+                raise Exception("All AI providers failed")
+
+            # Clean up the response
+            title = title.strip().strip('"').strip("'")
+
+            # Ensure it includes the skill name
+            if learning_goal.skill_name.lower() not in title.lower():
+                logger.warning(f"⚠️ Title missing skill name, appending it")
+                title = f"{title}: {learning_goal.skill_name}"
+
+            logger.info(f"✅ Context-aware title: {title}")
+            return title
+
+        except Exception as e:
+            logger.warning(f"⚠️ AI title generation failed: {e}, falling back to simple title")
+            # Fallback to simple title
+            return f"{learning_goal.skill_name.title()}: {user_profile.career_stage.replace('_', ' ').title()} Roadmap"
 
     def _clean_json_string(self, json_str: str) -> str:
         """
@@ -649,9 +808,11 @@ class HybridRoadmapService:
         self.openrouter_api_key = os.getenv('OPENROUTER_API_KEY')
         self._deepseek_client = None
         self._groq_client = None
+        self._openrouter_client = None
         self._last_deepseek_call = None
         self._last_gemini_call = None
-        self._model_usage = {'deepseek_v31': 0, 'groq': 0, 'gemini': 0}
+        self._last_openrouter_call = None
+        self._model_usage = {'qwen_coder': 0, 'groq': 0, 'gemini': 0}
         if not self.gemini_api_key:
             logger.warning("⚠️ GEMINI_API_KEY not found - Gemini fallback unavailable")
         if not self.groq_api_key:
@@ -695,28 +856,16 @@ class HybridRoadmapService:
     async def _generate_single_roadmap(self, user_profile: UserProfile, goal: LearningGoal) -> Optional[LearningRoadmap]:
         logger.info(f"🤖 Generating roadmap for: {goal.skill_name}")
         prompt = self._create_roadmap_prompt(user_profile, goal)
-        # Enforce stricter output for total_duration at the prompt level to avoid long sentences
         try:
             prompt = self._enforce_total_duration_prompt(prompt)
         except Exception:
             pass
+            
         try:
-            # Try DeepSeek V3.1 (OpenRouter)
-            if self.openrouter_api_key:
-                try:
-                    content = await self._generate_with_deepseek_v31(prompt)
-                    self._model_usage['deepseek_v31'] += 1
-                    logger.info("✅ DeepSeek V3.1 API call success")
-                    parsed_result = self._parse_ai_response(content, goal)
-                    if parsed_result is None:
-                        raise ValueError("DeepSeek returned invalid/unparseable response")
-                    logger.info("✅ DeepSeek V3.1 roadmap parsed successfully")
-                    return parsed_result
-                except Exception as e:
-                    logger.warning(f"⚠️ DeepSeek V3.1 error: {e}, falling back to Groq")
-            # Fallback to Groq
+            # PRIORITY 1: Groq Llama 3.3 70B (Fastest & Reliable)
             if self.groq_api_key:
                 try:
+                    logger.info("🚀 Primary: Trying Groq Llama 3.3 70B...")
                     content = await self._generate_with_groq(prompt)
                     self._model_usage['groq'] += 1
                     logger.info("✅ Groq API call success")
@@ -727,105 +876,83 @@ class HybridRoadmapService:
                     return parsed_result
                 except Exception as e:
                     logger.warning(f"⚠️ Groq error: {e}, falling back to Gemini")
-            # Final fallback to Gemini
+
+            # PRIORITY 2: Gemini 2.5 Flash (Stable Backup)
             if self.gemini_api_key:
-                content = await self._generate_with_gemini(prompt)
-                self._model_usage['gemini'] += 1
-                logger.info("✅ Gemini API call success")
-                parsed_result = self._parse_ai_response(content, goal)
-                if parsed_result is None:
-                    raise ValueError("Gemini returned invalid/unparseable response")
-                logger.info("✅ Gemini roadmap parsed successfully")
-                return parsed_result
-            logger.error("❌ No AI provider available for roadmap generation")
+                try:
+                    logger.info("🔷 Secondary: Trying Gemini 2.5 Flash...")
+                    content = await self._generate_with_gemini(prompt)
+                    self._model_usage['gemini'] += 1
+                    logger.info("✅ Gemini API call success")
+                    parsed_result = self._parse_ai_response(content, goal)
+                    if parsed_result is None:
+                        raise ValueError("Gemini returned invalid/unparseable response")
+                    logger.info("✅ Gemini roadmap parsed successfully")
+                    return parsed_result
+                except Exception as e:
+                    logger.warning(f"⚠️ Gemini error: {e}, falling back to Qwen")
+
+            # PRIORITY 3: Qwen 3 Coder (Fallback)
+            if self.openrouter_api_key:
+                try:
+                    logger.info("🤖 Tertiary: Trying Qwen 3 Coder...")
+                    content = await self._generate_with_openrouter(prompt, model="qwen/qwen3-coder:free")
+                    self._model_usage['qwen_coder'] += 1
+                    logger.info("✅ Qwen 3 Coder API call success")
+                    parsed_result = self._parse_ai_response(content, goal)
+                    if parsed_result is None:
+                        raise ValueError("Qwen returned invalid/unparseable response")
+                    logger.info("✅ Qwen roadmap parsed successfully")
+                    return parsed_result
+                except Exception as e:
+                    logger.error(f"❌ Qwen 3 Coder error: {e}")
+
+            logger.error("❌ All AI providers failed for roadmap generation")
             return None
         except Exception as e:
             logger.error(f"❌ Error in hybrid roadmap generation: {e}")
             return None
 
-    async def _generate_with_deepseek_v31(self, prompt: str, max_tokens: int = 4096) -> str:
-
-        def _normalize_total_duration(self, raw_total: str) -> str:
-            """
-            Normalize an AI-provided total_duration into a concise, DB-safe format.
-
-            Expected outputs:
-            - "8-10 weeks"
-            - "5 weeks"
-
-            If the AI returned a sentence like "Approximately 8-10 weeks at your pace, ...",
-            this function will extract the numeric range or single number and format it.
-            Falls back to truncating the raw string to 50 chars if no numeric info is found.
-            """
-            if not raw_total or not isinstance(raw_total, str):
-                return ""
-
-            raw = raw_total.strip()
-            # 1) Range with hyphen: 8-10 weeks, 8 - 10 weeks, approximately 8-10 weeks
-            m = re.search(r"(\d{1,2})\s*-\s*(\d{1,2})\s*weeks?", raw, re.IGNORECASE)
-            if m:
-                a, b = m.group(1), m.group(2)
-                return f"{int(a)}-{int(b)} weeks"
-
-            # 2) Single number: '5 weeks' or '5 week'
-            m2 = re.search(r"(\d{1,2})\s*weeks?", raw, re.IGNORECASE)
-            if m2:
-                return f"{int(m2.group(1))} weeks"
-
-            # 3) If contains two numbers separated by space or words, use first two as range
-            nums = re.findall(r"\d{1,2}", raw)
-            if len(nums) >= 2:
-                return f"{int(nums[0])}-{int(nums[1])} weeks"
-            if len(nums) == 1:
-                return f"{int(nums[0])} weeks"
-
-            # 4) As a last resort, truncate to 50 chars to fit DB
-            return raw[:50]
-
-        def _enforce_total_duration_prompt(self, prompt: str) -> str:
-            """
-            Append a short instruction to the roadmap prompt to force the model to return
-            a concise machine-friendly `total_duration` value (e.g. "8-10 weeks" or "5 weeks").
-            """
-            if not prompt:
-                return prompt
-            instruction = (
-                "\n\nSTRICT OUTPUT INSTRUCTION: When you include the field `total_duration`,"
-                " output ONLY a short value in one of these formats: '8-10 weeks' or '5 weeks'."
-                " Do NOT output a sentence or extra commentary. Use digits and the word 'weeks'."
-            )
-            return prompt + instruction
+    async def _generate_with_openrouter(self, prompt: str, model: str = "qwen/qwen3-coder:free", max_tokens: int = 4096) -> str:
         try:
             from openai import AsyncOpenAI
         except Exception as ie:
             logger.warning("⚠️ openai/OpenRouter client not available: %s", ie)
-            raise RuntimeError("DeepSeek/OpenRouter client not available") from ie
+            raise RuntimeError("OpenRouter client not available") from ie
+        
         from datetime import datetime
         import asyncio
-        if self._last_deepseek_call:
-            elapsed = (datetime.now() - self._last_deepseek_call).total_seconds()
-            if elapsed < 3:
-                await asyncio.sleep(3 - elapsed)
-        self._last_deepseek_call = datetime.now()
-        if not self._deepseek_client:
-            self._deepseek_client = AsyncOpenAI(
+        
+        # Simple rate limit for OpenRouter models
+        # (Assuming generic 1s buffer if shared key usage)
+        if self._last_openrouter_call:
+            elapsed = (datetime.now() - self._last_openrouter_call).total_seconds()
+            if elapsed < 1:
+                await asyncio.sleep(1 - elapsed)
+        self._last_openrouter_call = datetime.now()
+
+        if not self._openrouter_client:
+            self._openrouter_client = AsyncOpenAI(
                 base_url="https://openrouter.ai/api/v1",
                 api_key=self.openrouter_api_key,
                 timeout=60.0,
-                max_retries=0
+                max_retries=1
             )
+            
         extra_headers = {
             "HTTP-Referer": "https://skillsync.studio",
             "X-Title": "SkillSync Learning Platform"
         }
+        
         kwargs = {
-            "model": "deepseek/deepseek-chat-v3.1:free",
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
             "max_tokens": max_tokens,
             "extra_headers": extra_headers
         }
-        response = await self._deepseek_client.chat.completions.create(**kwargs)
+        
+        response = await self._openrouter_client.chat.completions.create(**kwargs)
         return response.choices[0].message.content
 
     async def _generate_with_groq(self, prompt: str, max_tokens: int = 4096) -> str:
@@ -854,26 +981,124 @@ class HybridRoadmapService:
             raise RuntimeError("Gemini client not available") from ie
         from datetime import datetime
         import asyncio
-        # Rate limiting: 15 req/min = 4 seconds per request (Gemini 2.0 Flash free tier)
+        # Rate limiting: 10 req/min = 6 seconds per request (Gemini 2.5 Flash free tier)
         if self._last_gemini_call:
             elapsed = (datetime.now() - self._last_gemini_call).total_seconds()
-            if elapsed < 4:
-                await asyncio.sleep(4 - elapsed)
+            if elapsed < 6:
+                await asyncio.sleep(6 - elapsed)
         self._last_gemini_call = datetime.now()
         genai.configure(api_key=self.gemini_api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
-        generation_config = {
-            "temperature": 0.3,
-            "max_output_tokens": max_tokens,
-        }
-        response = await model.generate_content_async(
-            prompt,
-            generation_config=generation_config
+        model = genai.GenerativeModel(
+            model_name="gemini-2.5-flash",
+            generation_config={"temperature": 0.3, "max_output_tokens": max_tokens}
         )
+        response = await model.generate_content_async(prompt)
         return response.text
 
+    def _calculate_module_count(
+        self,
+        target_skill_level: str,
+        time_commitment: str,
+        career_stage: str,
+        learning_style: str
+    ) -> str:
+        """
+        Calculate dynamic module count based on 5 factors.
+
+        PHASE 2: Smart calculation replacing hardcoded "4-6 progressive steps"
+
+        Factors:
+        1. Target skill level (beginner → fewer, expert → more)
+        2. Time commitment (1-3 hours → fewer, 10+ hours → more)
+        3. Career stage (career_changer gets +20%)
+        4. Learning style (hands_on → more modules, reading → fewer deeper ones)
+        5. Total duration (estimated from time commitment and skill level)
+
+        Returns: String like "4-6" or "5-7" to use in prompt
+        """
+        logger.info(f"📊 Calculating module count: {target_skill_level}, {time_commitment}h/week, {career_stage}, {learning_style}")
+
+        # Base module count by skill level
+        if target_skill_level.lower() == 'beginner':
+            base_min, base_max = 4, 5
+        elif target_skill_level.lower() == 'intermediate':
+            base_min, base_max = 5, 7
+        else:  # advanced or expert
+            base_min, base_max = 6, 9
+
+        # Duration factor (extracted from time_commitment string like "1-3", "5-10", "10+")
+        duration_factor = 1.0
+        try:
+            # Extract number from time commitment (e.g., "1-3" → 2.5 avg, "5-10" → 7.5 avg)
+            if "10+" in time_commitment:
+                hours_per_week = 10
+            elif "-" in time_commitment:
+                parts = time_commitment.split("-")
+                hours_per_week = (int(parts[0]) + int(parts[1])) / 2
+            else:
+                hours_per_week = int(time_commitment) if time_commitment.isdigit() else 5
+
+            # Adjust based on hours per week
+            if hours_per_week <= 3:
+                duration_factor = 0.7  # Quick learners: fewer modules
+            elif hours_per_week <= 5:
+                duration_factor = 0.9
+            elif hours_per_week <= 10:
+                duration_factor = 1.0  # Normal pace
+            else:
+                duration_factor = 1.2  # Intensive learners: more modules
+        except Exception as e:
+            logger.debug(f"Could not parse time commitment '{time_commitment}': {e}")
+            duration_factor = 1.0
+
+        # Career stage factor
+        career_factor = 1.0
+        if career_stage and 'changer' in career_stage.lower():
+            career_factor = 1.2  # Career changers need more comprehensive foundation
+        elif career_stage and 'student' in career_stage.lower():
+            career_factor = 1.0
+        elif career_stage and ('senior' in career_stage.lower() or 'executive' in career_stage.lower()):
+            career_factor = 0.85  # Senior professionals: focused modules only
+
+        # Learning style factor
+        style_factor = 1.0
+        if learning_style and 'hands_on' in learning_style.lower():
+            style_factor = 1.15  # More modules for practical focus
+        elif learning_style and 'reading' in learning_style.lower():
+            style_factor = 0.9  # Fewer, deeper modules for reading
+        elif learning_style and 'video' in learning_style.lower():
+            style_factor = 1.0  # Standard for video
+        else:  # mixed
+            style_factor = 1.0
+
+        # Calculate final count
+        min_count = int(base_min * duration_factor * career_factor * style_factor)
+        max_count = int(base_max * duration_factor * career_factor * style_factor)
+
+        # Enforce reasonable bounds
+        min_count = max(2, min(min_count, 12))
+        max_count = max(min_count + 1, min(max_count, 14))
+
+        result = f"{min_count}-{max_count}"
+        logger.info(f"✅ Dynamic module count: {result} (base: {base_min}-{base_max}, duration: {duration_factor}, career: {career_factor}, style: {style_factor})")
+
+        return result
+
     def _create_roadmap_prompt(self, user_profile: UserProfile, goal: LearningGoal) -> str:
-        # (Prompt construction code as before, omitted for brevity)
+        """
+        Create prompt for roadmap generation with dynamic module count.
+
+        PHASE 2: Uses _calculate_module_count() instead of hardcoded "4-6"
+        """
+        # PHASE 2: Calculate dynamic module count
+        module_count = self._calculate_module_count(
+            target_skill_level=goal.target_skill_level,
+            time_commitment=user_profile.time_commitment,
+            career_stage=user_profile.career_stage,
+            learning_style=user_profile.learning_style
+        )
+
+        # (Prompt construction code as before)
         style_guidance = {
             'hands_on': 'Prioritize practical projects, coding exercises, labs, and interactive tutorials. Include 70% hands-on resources with specific project suggestions.',
             'video': 'Focus on video tutorials, recorded lectures, and visual demonstrations. Include 70% video-based resources with specific course recommendations.',
@@ -899,8 +1124,60 @@ class HybridRoadmapService:
             '10+': 'immersive learning (3+ hours daily)'
         }
         time_guidance = time_mapping.get(user_profile.time_commitment, 'moderate study sessions')
-    # Note: callers will append a strict instruction to ensure total_duration is short and machine-friendly.
-        return f"""You are an expert learning consultant and curriculum designer with 15+ years of experience in {user_profile.industry} industry training. Create a highly detailed, personalized learning roadmap that will transform this learner from their current level to their target proficiency.\n\nLEARNER PROFILE:\nRole: {user_profile.role} ({user_profile.career_stage} level)\nIndustry: {user_profile.industry}\nLearning Style: {user_profile.learning_style}\nWeekly Commitment: {user_profile.time_commitment} hours ({time_guidance})\n\nSPECIFIC LEARNING GOAL:\nSkill: {goal.skill_name}\nObjective: {goal.description}\nTarget Mastery: {goal.target_skill_level} level\nPriority: {goal.priority}/5 (higher = more urgent)\n\nINDUSTRY CONTEXT: {industry_note}\n\nLEARNING STYLE OPTIMIZATION: {style_instruction}\n\nCRITICAL REQUIREMENTS:\n1. Specificity: Provide exact resource names, tools, platforms, and websites\n2. Measurable Outcomes: Include specific skills/knowledge gained per step\n3. Industry Relevance: All content must align with {user_profile.industry} industry needs\n4. Time Optimization: Structure for {time_guidance}\n5. Progressive Difficulty: Each step builds logically on the previous one\n6. Real-world Application: Include practical projects and portfolio pieces\n\nRESOURCE QUALITY STANDARDS:\n- Only recommend resources that actually exist and are currently available\n- Prioritize well-rated, recent content (2020+)\n- Include mix of free and premium options\n- Specify exact course/book/tool names, not generic descriptions\n\nOUTPUT FORMAT (STRICT JSON):\n{{\n  \"skill_name\": \"{goal.skill_name}\",\n  \"description\": \"Compelling 2-sentence overview of the complete learning journey and career impact\",\n  \"total_duration\": \"realistic timeframe based on {user_profile.time_commitment} hours/week\",\n  \"difficulty_level\": \"{goal.target_skill_level}\",\n  \"steps\": [\n    {{\n      \"title\": \"Engaging step name that clearly states the milestone\",\n      \"description\": \"Detailed 3-4 sentence description of what learner will master, why it matters, and how it connects to their {user_profile.role} role\",\n      \"estimated_duration\": \"specific timeframe (e.g., '2 weeks at 5 hours/week')\",\n      \"difficulty\": \"beginner|intermediate|advanced\",\n      \"resources\": [\n        \"Exact resource name with author/platform (e.g., 'JavaScript: The Good Parts by Douglas Crockford')\",\n        \"Specific course title (e.g., 'React Complete Guide 2024 by Maximilian Schwarzmüller on Udemy')\",\n        \"Precise tool/website (e.g., 'CodePen.io for practice exercises')\"\n      ],\n      \"skills_covered\": [\n        \"Specific, measurable skill #1\",\n        \"Specific, measurable skill #2\",\n        \"Specific, measurable skill #3\"\n      ]\n    }}\n  ]\n}}\n\nVALIDATION CHECKLIST:\n- Each step has 3-5 specific, real resources\n- Skills covered are measurable and industry-relevant\n- Total duration matches weekly commitment\n- Resources match the {user_profile.learning_style} learning preference\n- Content progresses logically from {goal.target_skill_level} foundations to mastery\n- Industry context ({user_profile.industry}) is woven throughout\n\nCreate 4-6 progressive steps that will genuinely prepare this {user_profile.role} to excel with {goal.skill_name} in the {user_profile.industry} industry."""
+
+        # ✅ PHASE 5: Build role-specific context sections
+        personalized_greeting = f"Hello {user_profile.first_name}! " if user_profile.first_name else ""
+
+        # Career transition context (for career changers only)
+        career_transition_section = ""
+        if user_profile.career_stage == 'career_changer' and user_profile.current_role and user_profile.transition_timeline:
+            career_transition_section = f"""
+CAREER TRANSITION CONTEXT:
+Current Role: {user_profile.current_role}
+Target Field: {user_profile.industry}
+Timeline: {user_profile.transition_timeline}
+CRITICAL: This learner is transitioning careers. Focus on:
+- Transferable skills from {user_profile.current_role} to {user_profile.industry}
+- Portfolio-building projects that demonstrate career readiness
+- Industry-specific terminology and professional practices
+- Networking opportunities and community engagement
+- Job search preparation and interview skills for {user_profile.industry} roles
+"""
+
+        # Professional context (for working professionals)
+        professional_section = ""
+        if user_profile.career_stage in ['mid_level', 'senior_level'] and user_profile.current_role:
+            professional_section = f"""
+PROFESSIONAL CONTEXT:
+Current Position: {user_profile.current_role}
+Career Level: {user_profile.career_stage}
+FOCUS: This is an experienced professional upskilling. Emphasize:
+- Advanced concepts and best practices relevant to {user_profile.current_role}
+- Leadership and mentorship opportunities
+- Cutting-edge industry trends and emerging technologies
+- Strategic application to current role responsibilities
+- Time-efficient learning (respect their professional commitments)
+"""
+
+        # Student context (for students)
+        student_section = ""
+        if user_profile.career_stage == 'student':
+            student_section = f"""
+STUDENT CONTEXT:
+Career Stage: Student / Early Learner
+FOCUS: Building strong foundations for career entry. Emphasize:
+- Comprehensive fundamentals with clear explanations
+- Hands-on projects for portfolio building
+- Interview preparation and technical assessment practice
+- Career guidance and industry insights
+- Community resources and peer learning opportunities
+"""
+
+        # Combine role-specific sections
+        role_specific_context = career_transition_section + professional_section + student_section
+
+        # Note: callers will append a strict instruction to ensure total_duration is short and machine-friendly.
+        return f"""{personalized_greeting}You are an expert learning consultant and curriculum designer with 15+ years of experience in {user_profile.industry} industry training. Create a highly detailed, personalized learning roadmap that will transform this learner from their current level to their target proficiency.\n\nLEARNER PROFILE:\nRole: {user_profile.role} ({user_profile.career_stage} level)\nIndustry: {user_profile.industry}\nLearning Style: {user_profile.learning_style}\nWeekly Commitment: {user_profile.time_commitment} hours ({time_guidance}){role_specific_context}\n\nSPECIFIC LEARNING GOAL:\nSkill: {goal.skill_name}\nObjective: {goal.description}\nTarget Mastery: {goal.target_skill_level} level\nPriority: {goal.priority}/5 (higher = more urgent)\n\nINDUSTRY CONTEXT: {industry_note}\n\nLEARNING STYLE OPTIMIZATION: {style_instruction}\n\nMODULE NAMING CONVENTION (PHASE 2 - CONTEXT-AWARE):\nEach step represents a module. Create titles that:\n1. Show the learner's context: industry, role, career transition\n2. Progress from {goal.target_skill_level} → advanced\n3. Be specific and actionable (not generic)\n4. Include domain terms from {user_profile.industry} when applicable\n5. Reference practical application in their field\n\nExamples for {goal.skill_name} in {user_profile.industry}:\n- Instead of: \"Introduction to Basics\"\n- Use: \"Foundations for {user_profile.industry} Professionals\"\n- Or: \"{goal.skill_name} in {user_profile.industry}: Setup & Environment\"\n- Or: \"From {{current_knowledge}} to {goal.skill_name}: Practical Application\"\n\nCRITICAL REQUIREMENTS:\n1. Specificity: Provide exact resource names, tools, platforms, and websites\n2. Measurable Outcomes: Include specific skills/knowledge gained per step\n3. Industry Relevance: All content must align with {user_profile.industry} industry needs\n4. Time Optimization: Structure for {time_guidance}\n5. Progressive Difficulty: Each step builds logically on the previous one\n6. Real-world Application: Include practical projects and portfolio pieces\n\nRESOURCE QUALITY STANDARDS:\n- Only recommend resources that actually exist and are currently available\n- Prioritize well-rated, recent content (2020+)\n- Include mix of free and premium options\n- Specify exact course/book/tool names, not generic descriptions\n\nOUTPUT FORMAT (STRICT JSON):\n{{\n  \"skill_name\": \"{goal.skill_name}\",\n  \"description\": \"Compelling 2-sentence overview of the complete learning journey and career impact\",\n  \"total_duration\": \"realistic timeframe based on {user_profile.time_commitment} hours/week\",\n  \"difficulty_level\": \"{goal.target_skill_level}\",\n  \"steps\": [\n    {{\n      \"title\": \"Engaging step name that clearly states the milestone\",\n      \"description\": \"Detailed 3-4 sentence description of what learner will master, why it matters, and how it connects to their {user_profile.role} role\",\n      \"estimated_duration\": \"specific timeframe (e.g., '2 weeks at 5 hours/week')\",\n      \"difficulty\": \"beginner|intermediate|advanced\",\n      \"resources\": [\n        \"Exact resource name with author/platform (e.g., 'JavaScript: The Good Parts by Douglas Crockford')\",\n        \"Specific course title (e.g., 'React Complete Guide 2024 by Maximilian Schwarzmüller on Udemy')\",\n        \"Precise tool/website (e.g., 'CodePen.io for practice exercises')\"\n      ],\n      \"skills_covered\": [\n        \"Specific, measurable skill #1\",\n        \"Specific, measurable skill #2\",\n        \"Specific, measurable skill #3\"\n      ]\n    }}\n  ]\n}}\n\nVALIDATION CHECKLIST:\n- Each step has 3-5 specific, real resources\n- Skills covered are measurable and industry-relevant\n- Total duration matches weekly commitment\n- Resources match the {user_profile.learning_style} learning preference\n- Content progresses logically from {goal.target_skill_level} foundations to mastery\n- Industry context ({user_profile.industry}) is woven throughout\n\nCreate {module_count} progressive steps that will genuinely prepare this {user_profile.role} to excel with {goal.skill_name} in the {user_profile.industry} industry."""
 
 # Fallback and parse helpers (unchanged)
 

@@ -241,6 +241,25 @@ class LessonContent(models.Model):
         help_text="Metadata about generation: prompt, system_prompt, model, temperature, generated_at, etc."
     )
     
+    # ✨ NEW: On-Demand Generation Status
+    generation_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pending Generation'),
+            ('generating', 'Currently Generating'),
+            ('completed', 'Generation Completed'),
+            ('failed', 'Generation Failed'),
+        ],
+        default='completed',  # Default for existing lessons
+        db_index=True,
+        help_text="Status of lesson content generation"
+    )
+    generation_error = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Error message if generation failed"
+    )
+    
     # ✨ NEW: Multi-Source Research Attribution (Phase 2)
     source_type = models.CharField(
         max_length=50,

@@ -382,6 +382,38 @@ class LessonsQuery:
             return None
     
     @strawberry.field
+    async def get_lessons_by_module(
+        self,
+        info,
+        module_id: str
+    ) -> List[LessonContentType]:
+        """
+        Get all lessons for a specific module.
+        
+        This is used for the on-demand lesson generation flow where
+        lessons are created as skeletons during onboarding and then
+        generated on-demand when the user clicks on them.
+        
+        Args:
+            module_id: ID of the module
+        
+        Returns:
+            List of LessonContentType (ordered by lesson_number)
+        """
+        try:
+            lessons = await sync_to_async(list)(
+                LessonContent.objects.filter(module_id=module_id)
+                .order_by('lesson_number')
+            )
+            
+            logger.info(f"✅ Retrieved {len(lessons)} lessons for module {module_id}")
+            return lessons
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get lessons for module {module_id}: {e}")
+            return []
+    
+    @strawberry.field
     async def get_lesson_versions(
         self,
         info,

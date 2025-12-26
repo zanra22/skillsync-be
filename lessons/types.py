@@ -63,7 +63,7 @@ class LessonContentType:
     Represents a single version of lesson content for a specific topic.
     Multiple versions can exist for the same topic/step.
     """
-    id: int
+    id: str  # CharField in model, not int
     roadmap_step_title: str
     lesson_number: int
     learning_style: str
@@ -88,6 +88,10 @@ class LessonContentType:
     source_type: str
     source_attribution: strawberry.scalars.JSON
     research_metadata: strawberry.scalars.JSON
+    
+    # ✨ NEW: On-Demand Generation Status (Phase 3)
+    generation_status: str  # pending, generating, completed, failed
+    generation_error: Optional[str]
     
     # Community Feedback
     upvotes: int

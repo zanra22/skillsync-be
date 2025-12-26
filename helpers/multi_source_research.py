@@ -42,23 +42,28 @@ class MultiSourceResearchEngine:
     Coordinates research from multiple sources to verify content quality.
     Uses dedicated service classes for each data source.
 
-    PHASE 2: Adds YouTube video source with DailyMotion fallback.
+    PHASE 2: Adds YouTube video source with 3-tier quality filtering.
     """
 
     # Rate limits
     MAX_CONCURRENT_REQUESTS = 5
     REQUEST_TIMEOUT = 30  # seconds
 
-    def __init__(self, youtube_service=None, dailymotion_service=None):
+    def __init__(self, youtube_service=None):
         """
         Initialize research engine with all service classes.
 
         Args:
             youtube_service: Optional YouTubeService instance
-            dailymotion_service: Optional DailyMotionAPIService instance
         """
         self.github_token = os.getenv('GITHUB_TOKEN')  # Optional but recommended
         self.stackoverflow_key = os.getenv('STACKOVERFLOW_API_KEY')  # Optional - increases quota
+
+        # Debug: Log token status
+        if self.github_token:
+            logger.info(f"✓ GitHub token loaded (length: {len(self.github_token)})")
+        else:
+            logger.warning("⚠️ GITHUB_TOKEN not found in environment")
 
         # Initialize all research services
         self.docs_scraper = OfficialDocsScraperService()
@@ -66,10 +71,8 @@ class MultiSourceResearchEngine:
         self.github_service = GitHubAPIService(token=self.github_token)
         self.devto_service = DevToAPIService()
 
-        # Initialize video services (lazy loaded if not provided)
+        # Initialize YouTube service (lazy loaded if not provided)
         self.youtube_service = youtube_service
-        self.dailymotion_service = dailymotion_service
-        self.video_fallback_service = None
 
         if not self.github_token:
             logger.warning(
@@ -398,42 +401,37 @@ class MultiSourceResearchEngine:
         topic: str
     ) -> Optional[Dict]:
         """
-        Fetch tutorial video with 2-tier fallback (YouTube → DailyMotion).
+        Fetch tutorial video using YouTube Data API v3 with 3-tier quality filtering.
 
-        PHASE 2.2: YouTube primary, DailyMotion fallback when YouTube unavailable.
+        PHASE 2.2: YouTube with intelligent ranking (views, likes, recency).
 
         Returns:
-            Dict with video metadata, source, and fallback reason or None
+            Dict with video metadata or None
         """
         try:
             logger.debug(f"   Fetching tutorial videos...")
 
-            # Initialize video fallback service if needed
-            if not self.video_fallback_service and self.youtube_service and self.dailymotion_service:
-                self.video_fallback_service = VideoSourceFallbackService(
-                    self.youtube_service,
-                    self.dailymotion_service
-                )
-
-            if not self.video_fallback_service:
-                logger.debug(f"   ⚠️ Video services not available (youtube_service or dailymotion_service not provided)")
+            if not self.youtube_service:
+                logger.debug(f"   ⚠️ YouTube service not available")
                 return None
 
-            # Search with fallback
-            video, source, fallback_reason = await self.video_fallback_service.search_with_fallback(
+            # Search with 3-tier quality filtering (blocking call, use thread)
+            import asyncio
+            video = await asyncio.to_thread(
+                self.youtube_service.search_and_rank,
                 topic=topic,
                 max_results=3
             )
 
             if video:
-                logger.debug(f"   ✓ Found {source} video: {video['title'][:40]}")
+                logger.debug(f"   ✓ Found YouTube video: {video['title'][:40]}")
                 return {
                     'video': video,
-                    'source': source,
-                    'fallback_reason': fallback_reason
+                    'source': 'YouTube',
+                    'quality_tier': video.get('quality_tier', 'unknown')
                 }
             else:
-                logger.debug(f"   ⚠️ No videos found (all sources exhausted)")
+                logger.debug(f"   ⚠️ No videos found matching quality criteria")
                 return None
 
         except Exception as e:
@@ -551,7 +549,7 @@ class MultiSourceResearchEngine:
                     f"   URL: {article['url']}\n"
                 )
 
-        # 5. YouTube/DailyMotion Videos (PHASE 2)
+        # 5. YouTube Videos (PHASE 2 - 3-tier quality filtering)
         if sources.get('youtube_videos'):
             video_source = research_data.get('video_source', 'unknown').capitalize()
             video = sources['youtube_videos']

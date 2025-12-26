@@ -29,7 +29,7 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 
 # Import research engine
-from .multi_source_research import multi_source_research_engine
+from .multi_source_research import MultiSourceResearchEngine
 
 # Import YouTube service module
 from .youtube import YouTubeService, VideoAnalyzer
@@ -335,10 +335,6 @@ class LessonGenerationService:
             self.youtube_service_account = None
             print(f"[HybridLessonService.__init__] YOUTUBE_SERVICE_ACCOUNT load failed: {e}", flush=True)
 
-        # Multi-source research engine
-        self.research_engine = multi_source_research_engine
-        logger.info("🔬 Multi-source research engine initialized")
-
         # YouTube service with quality ranking and transcript fallback
         # Now with OAuth2 service account authentication (prevents bot detection)
         print(f"[HybridLessonService.__init__] Initializing YouTubeService with:", flush=True)
@@ -357,27 +353,31 @@ class LessonGenerationService:
             logger.info("🎥 YouTube service initialized with API key fallback")
             print("[HybridLessonService.__init__] Using API key fallback (no service account)", flush=True)
 
+        # Multi-source research engine (pass YouTube service for video research)
+        self.research_engine = MultiSourceResearchEngine(youtube_service=self.youtube_service)
+        logger.info("🔬 Multi-source research engine initialized with YouTube service")
+
         # API URLs - Use Gemini 2.0 Flash Experimental (stable, free tier)
         # Free tier: 15 RPM, 200 RPD (better RPM than 2.5 Flash which has 10 RPM)
         # Stick with 2.0 for now - higher RPM is critical for our fallback system
         self.gemini_endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent'
         
         # Model usage tracking
+        # Model usage tracking
         self._model_usage = {
-            'deepseek_v31': 0,
+            'qwen_coder': 0,
             'groq': 0,
             'gemini': 0
         }
         
         # Rate limiting tracking
-        self._last_deepseek_call = None  # DeepSeek: 20 req/min = 3s intervals
-        self._last_gemini_call = None    # Gemini 2.0 Flash: 10 req/min = 6s intervals
-        # Groq: No rate limiting needed (14,400 req/day is very generous)
-
+        self._last_gemini_call = None
+        self._last_openrouter_call = None
+        
         # Async client instances (initialized lazily, closed on cleanup)
-        self._deepseek_client = None
         self._groq_client = None
         self._gemini_client = None
+        self._openrouter_client = None
         
         # Validate critical APIs
         if not self.gemini_api_key:
@@ -393,9 +393,9 @@ class LessonGenerationService:
             logger.warning("⚠️ GROQ_API_KEY not found - Whisper transcription fallback unavailable")
         
         if not self.openrouter_api_key:
-            logger.warning("⚠️ OPENROUTER_API_KEY not found - DeepSeek V3.1 unavailable, will use Groq/Gemini only")
+            logger.warning("⚠️ OPENROUTER_API_KEY not found - Qwen unavailable, will use Groq/Gemini only")
         else:
-            logger.info("✅ Hybrid AI System: DeepSeek V3.1 (primary) → Groq (fallback) → Gemini (backup)")
+            logger.info("✅ Hybrid AI System: Groq (primary) → Gemini (secondary) → Qwen (tertiary)")
     
     async def cleanup(self):
         """
@@ -404,12 +404,12 @@ class LessonGenerationService:
         Call this before event loop closes to properly close HTTP connections.
         Prevents "RuntimeError: Event loop is closed" warnings on Windows.
         """
-        if self._deepseek_client:
+        if self._openrouter_client:
             try:
-                await self._deepseek_client.close()
-                logger.debug("🧹 Closed DeepSeek client")
+                await self._openrouter_client.close()
+                logger.debug("🧹 Closed OpenRouter client")
             except Exception as e:
-                logger.debug(f"⚠️ Error closing DeepSeek client: {e}")
+                logger.debug(f"⚠️ Error closing OpenRouter client: {e}")
         
         if self._groq_client:
             try:
@@ -497,7 +497,7 @@ class LessonGenerationService:
         num_lessons = lesson_counts.get(module_difficulty, {}).get(learning_pace, 5)
         duration_min, duration_max = video_durations.get(module_difficulty, {}).get(learning_pace, (10, 20))
 
-        # Adjust based on time commitment (hours per week)
+        # PHASE 3: Adjust based on time commitment (hours per week)
         if time_commitment < 2:
             # Low time commitment: more lessons (shorter, more manageable)
             num_lessons = min(num_lessons + 2, 8)
@@ -505,6 +505,12 @@ class LessonGenerationService:
         elif time_commitment > 10:
             # High time commitment: can handle longer, deeper videos
             duration_min = max(duration_min, 10)
+
+        # PHASE 3 ENHANCEMENT: Module position awareness
+        # This allows callers to adjust lesson count based on module position
+        # First modules: fewer lessons (foundation)
+        # Middle modules: normal/more lessons (core content)
+        # Last modules: fewer lessons (capstone/application)
 
         return {
             'num_lessons': num_lessons,
@@ -595,6 +601,15 @@ class LessonGenerationService:
 
         logger.info(f"📊 Lesson plan: {num_lessons} lessons, {params['video_duration_min']}-{params['video_duration_max']} min videos")
 
+        # PHASE 4: Create context-aware prompt with learning style consideration
+        learning_style_guidance = {
+            'hands_on': 'Focus on practical exercises and coding challenges. Lesson titles should emphasize "Build", "Create", "Implement", "Practice".',
+            'video': 'Lesson titles should work well for video tutorials. Include "Understanding", "Tutorial", "Guide", "Walkthrough".',
+            'reading': 'Lesson titles should emphasize deep understanding. Include "Understanding", "Deep Dive", "Concepts", "Theory".',
+            'mixed': 'Lesson titles should be comprehensive and work across multiple formats. Balance practical and theoretical aspects.'
+        }
+        style_note = learning_style_guidance.get(user_learning_pace, '')
+
         # Create prompt for AI to generate lesson structure
         prompt = f"""
 You are an expert programming educator. Create a structured curriculum for teaching "{module_title}".
@@ -604,21 +619,27 @@ Requirements:
 - Number of lessons: {num_lessons}
 - Each lesson should build logically on previous ones
 - Learner pace: {user_learning_pace}
+- Learning style: {style_note}
 
 For EACH lesson, provide in JSON format:
 {{
     "lesson_number": <number>,
-    "title": "<specific lesson title>",
+    "title": "<specific lesson title tailored to learning style>",
     "description": "<2-3 sentence description of what this lesson teaches>",
     "learning_objectives": ["<objective 1>", "<objective 2>", "<objective 3>"],
     "search_query": "<optimized YouTube search query for this specific lesson>"
 }}
 
-IMPORTANT:
-- Titles should be specific and actionable (e.g., "Understanding If/Else Statements" not "Conditionals Overview")
-- Search queries should be optimized for educational YouTube videos (e.g., "Python if else tutorial" not just "if else")
+IMPORTANT (PHASE 4 ENHANCEMENT):
+- Titles should be CONTEXT-AWARE:
+  * For hands-on: "Build a...", "Implement...", "Create...", emphasize the practical project
+  * For video: "Understanding...", "Mastering...", work well as video chapter titles
+  * For reading: "Deep Dive into...", "Concepts of...", emphasize the theory
+  * For mixed: balance practical and theoretical, e.g., "Understanding X: Theory & Practice"
+- Titles should build on the module context: "{module_title}"
+- Search queries should be optimized for educational videos
 - Include learning objectives that explain WHAT students will be able to do
-- Ensure logical progression from basics to more complex concepts
+- Ensure logical progression from {module_difficulty} to advanced
 
 Return ONLY a JSON array of lessons, nothing else. Example format:
 [
@@ -788,9 +809,9 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
         Hybrid AI generation with automatic fallback
         
         Priority order:
-        1. DeepSeek V3.1 (FREE 1M tokens/month) - Best for coding
-        2. Groq Llama 3.3 70B (FREE 14,400/day) - Fastest
-        3. Gemini 2.0 Flash (FREE 50/day) - Final backup
+        1. Groq Llama 3.3 70B (FREE 14,400/day) - Fastest & Reliable
+        2. Gemini 2.5 Flash (FREE 1,500/day) - Stable Backup
+        3. Qwen 3 Coder (FREE via OpenRouter) - Fallback
         
         Args:
             prompt: Text prompt
@@ -800,73 +821,75 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
         Returns:
             Generated text content
         """
-        # Try DeepSeek V3.1 first (FREE tier via OpenRouter)
-        if self.openrouter_api_key:
-            try:
-                logger.debug("🤖 Trying DeepSeek V3.1 (FREE)...")
-                content = await self._generate_with_deepseek_v31(prompt, json_mode, max_tokens)
-                self._model_usage['deepseek_v31'] += 1
-                logger.info("✅ DeepSeek V3.1 success")
-                return content
-            except Exception as e:
-                error_msg = str(e).lower()
-                if 'quota' in error_msg or 'limit' in error_msg or '429' in error_msg:
-                    logger.warning(f"⚠️ DeepSeek V3.1 quota exceeded, falling back to Groq")
-                else:
-                    logger.warning(f"⚠️ DeepSeek V3.1 error: {e}, falling back to Groq")
-        
-        # Fallback to Groq (FREE unlimited)
+        # PRIORITY 1: Groq (FREE unlimited)
         if self.groq_api_key:
             try:
-                logger.debug("🚀 Trying Groq Llama 3.3 70B...")
+                logger.debug("🚀 Primary: Trying Groq Llama 3.3 70B...")
                 content = await self._generate_with_groq(prompt, json_mode, max_tokens)
                 self._model_usage['groq'] += 1
                 logger.info("✅ Groq success")
                 return content
             except Exception as e:
                 logger.warning(f"⚠️ Groq error: {e}, falling back to Gemini")
-        
-        # Final fallback to Gemini (FREE 50/day)
-        logger.debug("🔷 Trying Gemini 2.0 Flash...")
-        content = await self._generate_with_gemini(prompt, json_mode, max_tokens)
-        self._model_usage['gemini'] += 1
-        logger.info("✅ Gemini success")
-        return content
+
+        # PRIORITY 2: Gemini 2.5 Flash
+        logger.debug("🔷 Secondary: Trying Gemini 2.5 Flash...")
+        try:
+            content = await self._generate_with_gemini(prompt, json_mode, max_tokens)
+            self._model_usage['gemini'] += 1
+            logger.info("✅ Gemini success")
+            return content
+        except Exception as e:
+            logger.warning(f"⚠️ Gemini error: {e}, falling back to Qwen")
+
+        # PRIORITY 3: Qwen 3 Coder (Fallback via OpenRouter)
+        if self.openrouter_api_key:
+            try:
+                logger.debug("🤖 Tertiary: Trying Qwen 3 Coder...")
+                content = await self._generate_with_openrouter(prompt, json_mode, max_tokens, model="qwen/qwen3-coder:free")
+                self._model_usage['qwen_coder'] += 1
+                logger.info("✅ Qwen success")
+                return content
+            except Exception as e:
+                logger.error(f"❌ Qwen error: {e}")
+                
+        raise ValueError("All AI providers failed")
     
-    async def _generate_with_deepseek_v31(self, prompt: str, json_mode: bool = False, max_tokens: int = 8000) -> str:
+    async def _generate_with_openrouter(self, prompt: str, json_mode: bool = False, max_tokens: int = 8000, model: str = "qwen/qwen3-coder:free") -> str:
         """
-        DeepSeek V3.1 via OpenRouter (FREE tier) using OpenAI SDK
+        Generic OpenRouter provider for any model
         
-        Model: deepseek/deepseek-chat:free (IMPORTANT: :free suffix!)
-        Free Tier: 1M tokens/month
-        Quality: GPT-4o level for coding (84% HumanEval)
-        Speed: 60-80 tokens/sec
-        Rate Limit: 20 req/min = 3-second intervals
+        Args:
+            prompt: Text prompt
+            json_mode: Whether to force JSON response
+            max_tokens: Maximum tokens to generate
+            model: OpenRouter model ID (e.g., "qwen/qwen3-coder:free")
+        
+        Returns:
+            Generated text content
         """
         from openai import AsyncOpenAI
         from datetime import datetime
         import asyncio
         
-        # Rate limiting: 20 req/min = 3 seconds per request
-        if self._last_deepseek_call:
-            elapsed = (datetime.now() - self._last_deepseek_call).total_seconds()
-            if elapsed < 3:
-                wait_time = 3 - elapsed
-                logger.info(f"⏱️ DeepSeek rate limit: waiting {wait_time:.1f}s")
-                await asyncio.sleep(wait_time)
+        # Rate limiting: 1 second buffer for OpenRouter
+        if self._last_openrouter_call:
+            elapsed = (datetime.now() - self._last_openrouter_call).total_seconds()
+            if elapsed < 1:
+                await asyncio.sleep(1 - elapsed)
         
-        self._last_deepseek_call = datetime.now()
+        self._last_openrouter_call = datetime.now()
         
         # Initialize OpenAI client with OpenRouter base URL (lazy initialization)
-        if not self._deepseek_client:
-            self._deepseek_client = AsyncOpenAI(
+        if not self._openrouter_client:
+            self._openrouter_client = AsyncOpenAI(
                 base_url="https://openrouter.ai/api/v1",
                 api_key=self.openrouter_api_key,
                 timeout=60.0,
-                max_retries=0  # Fail fast to Groq instead of consuming quota on retries
+                max_retries=1
             )
         
-        # Extra headers for OpenRouter leaderboard (optional)
+        # Extra headers for OpenRouter leaderboard
         extra_headers = {
             "HTTP-Referer": "https://skillsync.studio",
             "X-Title": "SkillSync Learning Platform"
@@ -874,7 +897,7 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
         
         # Build completion request
         kwargs = {
-            "model": "deepseek/deepseek-chat-v3.1:free",  # CRITICAL: :free suffix for FREE tier!
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7,
             "max_tokens": max_tokens,
@@ -884,19 +907,12 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         
-        response = await self._deepseek_client.chat.completions.create(**kwargs)
-        message = response.choices[0].message
-
-        # DeepSeek R1 with reasoning outputs JSON in the reasoning field when json_mode is enabled
-        # Try content first, then reasoning
-        content = message.content
-        if not content and hasattr(message, 'reasoning') and message.reasoning:
-            logger.debug(f"📝 DeepSeek returned content in reasoning field (R1 behavior)")
-            content = message.reasoning
+        response = await self._openrouter_client.chat.completions.create(**kwargs)
+        content = response.choices[0].message.content
 
         if not content:
-            logger.warning(f"⚠️ DeepSeek returned empty content and reasoning")
-            raise ValueError("DeepSeek returned empty response content")
+            logger.warning(f"⚠️ OpenRouter returned empty content")
+            raise ValueError("OpenRouter returned empty response content")
 
         return content
     
@@ -938,11 +954,11 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
     
     async def _generate_with_gemini(self, prompt: str, json_mode: bool = False, max_tokens: int = 8000) -> str:
         """
-        Gemini 2.0 Flash (FREE tier)
+        Gemini 2.5 Flash (FREE tier)
 
-        Model: gemini-2.0-flash-exp
+        Model: gemini-2.5-flash
         Free Tier: 1,500 requests/day, 10 req/min
-        Quality: Good (71.9% HumanEval)
+        Quality: High (Improved coding/reasoning)
         Speed: 80 tokens/sec
         Rate Limit: 10 req/min = 6-second intervals
         """
@@ -973,7 +989,7 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
             generation_config["response_mime_type"] = "application/json"
 
         model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash-exp",
+            model_name="gemini-2.5-flash",
             generation_config=generation_config
         )
 
@@ -1660,7 +1676,7 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
     async def _generate_hands_on_lesson(self, request: LessonRequest, research_data: Optional[Dict] = None) -> Dict[str, Any]:
         """
         Generate hands-on lesson with coding exercises.
-        
+
         Structure:
         - Brief text explanation (200-300 words)
         - 3-4 coding exercises (progressive difficulty)
@@ -1668,19 +1684,19 @@ Return ONLY a JSON array of lessons, nothing else. Example format:
         - Expected outputs
         - Progressive hints (3 per exercise)
         - Solutions
-        
+
         Now includes research context for accuracy!
         """
         logger.info(f"🛠️ Generating hands-on lesson for: {request.step_title}")
-        
+
         prompt = self._create_hands_on_prompt(request, research_data)
 
-        # Call Gemini API
-        response = self._call_gemini_api(prompt)
+        # Call AI with proper async handling (FIXED: Was using sync _call_gemini_api)
+        response = await self._generate_with_ai(prompt, json_mode=False)
 
         if not response:
             return await self._generate_fallback_lesson(request)
-        
+
         # Parse AI response
         lesson_data = self._parse_hands_on_response(response, request)
 
@@ -1826,7 +1842,24 @@ Generate the complete lesson now for: \"{request.step_title}\".\n"""
             else:
                 json_str = ai_text.strip()
             
-            lesson_data = json.loads(json_str)
+            # Clean common JSON errors from AI
+            # 1. Remove trailing commas before closing brackets/braces
+            import re
+            json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
+            
+            # 2. Try to parse with json.loads
+            try:
+                lesson_data = json.loads(json_str)
+            except json.JSONDecodeError as json_err:
+                # If still fails, try to fix common issues
+                logger.warning(f"⚠️ JSON parse failed, attempting to fix: {json_err}")
+                
+                # Try removing comments (sometimes AI adds them)
+                json_str = re.sub(r'//.*?\n', '\n', json_str)
+                json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)
+                
+                # Try again
+                lesson_data = json.loads(json_str)
             
             # Validate structure
             required_keys = ['title', 'introduction', 'exercises']
@@ -1994,20 +2027,20 @@ Format as JSON:
     async def _generate_reading_lesson(self, request: LessonRequest, research_data: Optional[Dict] = None) -> Dict[str, Any]:
         """
         Generate reading-focused lesson with long-form text content.
-        
+
         Structure:
         - In-depth text (2,000-3,000 words)
         - Mermaid.js diagrams (syntax only, rendered client-side)
         - Hero image (Unsplash API)
         - Comprehension quiz
-        
+
         Now includes research context for accuracy!
         """
         logger.info(f"📚 Generating reading lesson for: {request.step_title}")
-        
+
         prompt = self._create_reading_prompt(request, research_data)
-        # Call Gemini API
-        response = self._call_gemini_api(prompt)
+        # Call AI with proper async handling (FIXED: Was using sync _call_gemini_api)
+        response = await self._generate_with_ai(prompt, json_mode=False)
         if not response:
             return await self._generate_fallback_lesson(request)
         # Parse response
@@ -2048,7 +2081,7 @@ Format as JSON:
         # Generate diagrams separately (better success rate)
         if lesson_data.get('content'):
             content_summary = lesson_data['content'][:500]  # First 500 chars for context
-            diagrams = self._generate_diagrams(request.step_title, content_summary)
+            diagrams = await self._generate_diagrams(request.step_title, content_summary)
             lesson_data['diagrams'] = diagrams
         else:
             lesson_data['diagrams'] = []
@@ -2329,7 +2362,7 @@ Description should be 2-3 sentences, highlighting the key learning objectives fo
 Output only the description text, no quotes or extra formatting.'''.format(
             lesson_number=request.lesson_number,
             step_title=request.step_title,
-            lesson_content=f"Lesson content preview: {lesson_content[:300]}" if lesson_content else ""
+            lesson_content=f"Lesson content preview: {str(lesson_content)[:300]}" if lesson_content else ""
         )
 
         try:
@@ -2670,30 +2703,149 @@ Generate for: {request.step_title}"""
             logger.error(f"❌ Failed to parse mixed exercises: {e}")
             return []
 
+    async def generate_single_lesson_content(self, lesson_id: str) -> bool:
+        """
+        Generate full content for a single lesson skeleton (ON-DEMAND GENERATION).
+        
+        PHASE 2: ON-DEMAND GENERATION ENDPOINT
+        
+        This method takes a lesson skeleton (with generation_status='pending') and:
+        1. Fetches the lesson from database
+        2. Retrieves stored metadata (user_profile, module_info, lesson_structure)
+        3. Generates full lesson content using existing generate_lesson() method
+        4. Updates the lesson with content and sets generation_status='completed'
+        
+        Args:
+            lesson_id: ID of the lesson skeleton to generate content for
+        
+        Returns:
+            True if generation succeeded, False otherwise
+        """
+        from asgiref.sync import sync_to_async
+        from lessons.models import LessonContent
+        
+        logger.info(f"🎯 [OnDemand] Generating content for lesson: {lesson_id}")
+        
+        try:
+            # Fetch the lesson skeleton
+            lesson = await sync_to_async(LessonContent.objects.get)(id=lesson_id)
+            
+            if lesson.generation_status == 'completed':
+                logger.warning(f"⚠️ Lesson {lesson_id} already has content (status: completed)")
+                return True
+            
+            if lesson.generation_status == 'generating':
+                logger.warning(f"⚠️ Lesson {lesson_id} is already being generated")
+                return False
+            
+            # Update status to 'generating'
+            lesson.generation_status = 'generating'
+            await sync_to_async(lesson.save)(update_fields=['generation_status'])
+            logger.info(f"📝 Status updated to 'generating'")
+            
+            # Retrieve stored metadata
+            metadata = lesson.generation_metadata or {}
+            lesson_structure = metadata.get('lesson_structure', {})
+            user_profile = metadata.get('user_profile', {})
+            module_info = metadata.get('module_info', {})
+            
+            # Extract lesson parameters
+            lesson_title = lesson_structure.get('title', lesson.title)
+            search_query = lesson_structure.get('search_query', lesson.title)
+            video_duration_min = lesson_structure.get('video_duration_min', 10)
+            video_duration_max = lesson_structure.get('video_duration_max', 20)
+            
+            logger.info(f"📚 Generating: {lesson_title}")
+            logger.info(f"   Style: {lesson.learning_style}")
+            logger.info(f"   Difficulty: {lesson.difficulty_level}")
+            
+            # Create lesson request
+            lesson_request = LessonRequest(
+                step_title=lesson_title,
+                lesson_number=lesson.lesson_number,
+                learning_style=lesson.learning_style,
+                user_profile=user_profile,
+                difficulty=lesson.difficulty_level,
+                category=module_info.get('category'),
+                programming_language=module_info.get('programming_language'),
+                enable_research=True,
+                video_duration_min=video_duration_min,
+                video_duration_max=video_duration_max
+            )
+            
+            # Generate full lesson content
+            logger.info(f"🤖 Calling AI to generate lesson content...")
+            lesson_data = await self.generate_lesson(lesson_request)
+            
+            if not lesson_data:
+                raise Exception("Lesson generation returned None")
+            
+            # Update lesson with full content
+            # Note: lesson_data itself IS the content (contains title, summary, exercises, etc.)
+            # Don't try to extract lesson_data['content'] - that key doesn't exist
+            lesson.content = lesson_data
+            lesson.source_attribution = lesson_data.get('source_attribution', {})
+            lesson.generation_status = 'completed'
+            lesson.generation_error = None
+            
+            await sync_to_async(lesson.save)(
+                update_fields=['content', 'source_attribution', 'generation_status', 'generation_error']
+            )
+            
+            logger.info(f"✅ Lesson {lesson_id} content generated successfully!")
+            logger.info(f"   Content size: {len(str(lesson.content))} chars")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to generate content for lesson {lesson_id}: {e}", exc_info=True)
+            
+            # Update status to 'failed' and store error
+            try:
+                lesson.generation_status = 'failed'
+                lesson.generation_error = str(e)
+                await sync_to_async(lesson.save)(
+                    update_fields=['generation_status', 'generation_error']
+                )
+            except Exception as save_error:
+                logger.error(f"❌ Failed to save error status: {save_error}")
+            
+            return False
+
+
     async def generate_lessons_for_module(self, module, user_profile: Optional[Dict] = None) -> int:
         """
-        Generate all lessons for a module using AI-generated lesson structure (NEW - Phase A.3).
-
+        Generate lesson SKELETONS for a module (titles, objectives, descriptions only).
+        
+        PHASE 1: ON-DEMAND GENERATION REFACTOR
+        
+        This method now creates lesson placeholders with generation_status='pending'.
+        Full lesson content is generated on-demand when user requests a specific lesson.
+        
         FLOW:
-        1. Generate lesson structure (AI breaks down module into specific lessons)
-        2. For each lesson:
-           - Search YouTube using lesson-specific query
-           - Generate lesson content
-           - Save to database
-
-        Called directly from Django mutation when Azure Function provides request key.
-
+        1. Generate lesson structure using AI (titles, objectives, descriptions)
+        2. Create LessonContent records with:
+           - title, description, learning_objectives, estimated_duration
+           - content = {} (empty)
+           - generation_status = 'pending'
+        3. Return number of skeletons created
+        
+        Benefits:
+        - Onboarding completes in <15 seconds (no timeout)
+        - User sees full roadmap immediately
+        - Lessons generate on-demand (better UX)
+        - No rate limit exhaustion
+        
         Args:
             module: Module object with id, title, difficulty, etc.
             user_profile: User's onboarding profile (optional)
-
+        
         Returns:
-            Number of lessons created
+            Number of lesson skeletons created
         """
         from asgiref.sync import sync_to_async
         from lessons.models import LessonContent
 
-        logger.info(f"🚀 [Module] Generating lessons for module: {module.title}")
+        logger.info(f"🚀 [Module] Creating lesson skeletons for module: {module.title}")
 
         try:
             # STEP 1: Generate lesson structure using AI
@@ -2718,84 +2870,81 @@ Generate for: {request.step_title}"""
 
             lessons_created = 0
 
-            # STEP 2: Generate lessons from structure
+            # STEP 2: Create lesson SKELETONS (no full content generation)
             for lesson_config in lesson_structure:
                 try:
                     lesson_num = lesson_config.get('lesson_number', lessons_created + 1)
                     lesson_title = lesson_config.get('title', f"Lesson {lesson_num}")
-                    search_query = lesson_config.get('search_query', module.title)
+                    description = lesson_config.get('description', '')
+                    learning_objectives = lesson_config.get('learning_objectives', [])
                     video_duration_min = lesson_config.get('video_duration_min', 10)
                     video_duration_max = lesson_config.get('video_duration_max', 20)
-                    learning_objectives = lesson_config.get('learning_objectives', [])
-                    description = lesson_config.get('description', '')
+                    search_query = lesson_config.get('search_query', module.title)
 
                     # Determine learning style (rotate through styles)
                     styles = ['hands_on', 'video', 'reading', 'mixed']
                     learning_style = styles[(lesson_num - 1) % len(styles)]
 
-                    logger.info(f"  📝 Lesson {lesson_num}/{len(lesson_structure)}: {lesson_title} ({learning_style})")
-                    logger.debug(f"     Search query: {search_query}")
-                    logger.debug(f"     Duration: {video_duration_min}-{video_duration_max} min")
+                    logger.info(f"  📝 Creating skeleton {lesson_num}/{len(lesson_structure)}: {lesson_title} ({learning_style})")
 
-                    # Create lesson request with lesson structure info + duration for video selection
-                    lesson_request = LessonRequest(
-                        step_title=lesson_title,  # Use specific lesson title, not module title
-                        lesson_number=lesson_num,
-                        learning_style=learning_style,
-                        user_profile=user_profile or {},
-                        difficulty=module.difficulty,
-                        category=getattr(module, 'category', None),
-                        programming_language=getattr(module, 'programming_language', None) or getattr(module.roadmap, 'goal_input', '').split()[0].lower() if hasattr(module, 'roadmap') else None,
-                        enable_research=True,
-                        video_duration_min=video_duration_min,  # Phase B: Duration-aware video selection
-                        video_duration_max=video_duration_max   # Phase B: Duration-aware video selection
-                    )
+                    # Calculate estimated duration based on lesson config
+                    estimated_duration = int((video_duration_min + video_duration_max) / 2)
 
-                    # Generate lesson content
-                    logger.debug(f"     Generating lesson content...")
-                    lesson_data = await self.generate_lesson(lesson_request)
-
-                    # Save to database
-                    if not lesson_data:
-                        raise Exception(f"Lesson {lesson_num} generation returned None")
-
-                    # Store lesson structure info in source_attribution
-                    source_attribution = lesson_data.get('source_attribution', {})
-                    source_attribution['lesson_structure'] = {
-                        'title': lesson_title,
-                        'description': description,
-                        'learning_objectives': learning_objectives,
-                        'search_query': search_query,
-                        'video_duration_min': video_duration_min,
-                        'video_duration_max': video_duration_max,
+                    # Store lesson structure metadata for later generation
+                    skeleton_metadata = {
+                        'lesson_structure': {
+                            'title': lesson_title,
+                            'description': description,
+                            'learning_objectives': learning_objectives,
+                            'search_query': search_query,
+                            'video_duration_min': video_duration_min,
+                            'video_duration_max': video_duration_max,
+                        },
+                        'user_profile': user_profile or {},
+                        'module_info': {
+                            'title': module.title,
+                            'difficulty': module.difficulty,
+                            'category': getattr(module, 'category', None),
+                            'programming_language': getattr(module, 'programming_language', None) or self._infer_language(module.title),
+                        }
                     }
 
+                    # Create lesson skeleton with generation_status='pending'
                     lesson_content = await sync_to_async(LessonContent.objects.create)(
                         module=module,
                         lesson_number=lesson_num,
-                        title=lesson_title,  # Store lesson title explicitly
-                        content=lesson_data.get('content', {}),
+                        title=lesson_title,
+                        description=description,
+                        roadmap_step_title=lesson_title,  # For compatibility
+                        content={},  # Empty content - will be generated on-demand
                         learning_style=learning_style,
                         difficulty_level=module.difficulty,
+                        estimated_duration=estimated_duration,
                         source_type='ai_only',
-                        source_attribution=source_attribution
+                        generation_status='pending',  # NEW: Mark as pending generation
+                        generation_metadata=skeleton_metadata,  # Store metadata for later use
+                        source_attribution={
+                            'lesson_objectives': learning_objectives,
+                            'estimated_duration_range': f"{video_duration_min}-{video_duration_max} min"
+                        }
                     )
 
                     # Verify the lesson was actually saved
                     if not lesson_content or not lesson_content.id:
-                        raise Exception(f"Lesson {lesson_num} was not saved to database")
+                        raise Exception(f"Lesson {lesson_num} skeleton was not saved to database")
 
-                    logger.info(f"  ✅ Lesson {lesson_num} created: {lesson_content.id}")
+                    logger.info(f"  ✅ Skeleton {lesson_num} created: {lesson_content.id} (status: pending)")
                     lessons_created += 1
 
                 except Exception as lesson_error:
-                    logger.error(f"  ❌ Failed to generate/save lesson {lesson_num}: {lesson_error}", exc_info=True)
+                    logger.error(f"  ❌ Failed to create skeleton for lesson {lesson_num}: {lesson_error}", exc_info=True)
                     # Continue with next lesson even if one fails
                     continue
 
-            logger.info(f"✅ Successfully created {lessons_created}/{len(lesson_structure)} lessons")
+            logger.info(f"✅ Successfully created {lessons_created}/{len(lesson_structure)} lesson skeletons")
+            logger.info(f"💡 Lessons will be generated on-demand when user requests them")
             return lessons_created
 
         except Exception as e:
-            logger.error(f"❌ Failed to generate lessons for module: {e}", exc_info=True)
+            logger.error(f"❌ Failed to generate lesson skeletons for module: {e}", exc_info=True)
             raise

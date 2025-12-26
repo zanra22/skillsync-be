@@ -250,7 +250,11 @@ class OnboardingMutation:
                         career_stage=input.career_stage or 'entry_level',
                         learning_style=input.preferences.learning_style if input.preferences else 'mixed',
                         time_commitment=input.preferences.time_commitment if input.preferences else '3-5',
-                        goals=learning_goals
+                        goals=learning_goals,
+                        # ✅ PHASE 5: Pass additional personalization fields
+                        first_name=input.first_name,
+                        current_role=input.current_role,
+                        transition_timeline=input.transition_timeline
                     )
 
                     from helpers.ai_roadmap_service import HybridRoadmapService
