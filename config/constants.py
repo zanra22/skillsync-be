@@ -94,6 +94,9 @@ DATABASES = {
         "PASSWORD": os.getenv("PROD_DB_PASSWORD"),
         "HOST": os.getenv("PROD_DB_HOST", "localhost"),
         "PORT": os.getenv("PROD_DB_PORT", "5432"),
+        "OPTIONS": {
+            "sslmode": "require",  # Required for Azure PostgreSQL
+        },
     },
 }
 
