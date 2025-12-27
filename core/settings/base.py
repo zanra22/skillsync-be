@@ -140,7 +140,11 @@ DATABASES = {
 # Without these settings, Django creates new connections for each request
 # which causes timeouts and hanging requests when PostgreSQL takes time to respond
 DATABASES['default']['CONN_MAX_AGE'] = 600  # Keep connections alive for 10 minutes
+
+# Merge existing OPTIONS from constants.py with connection pooling settings
+existing_options = DATABASES['default'].get('OPTIONS', {})
 DATABASES['default']['OPTIONS'] = {
+    **existing_options,  # Keep sslmode from constants.py if present
     'connect_timeout': 10,  # 10 second timeout for initial connection
     'options': '-c statement_timeout=30000'  # 30 second statement timeout
 }
